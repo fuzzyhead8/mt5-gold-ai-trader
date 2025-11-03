@@ -14,7 +14,12 @@ from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
 
+import os
+from dotenv import load_dotenv
+
 logging.basicConfig(level=logging.INFO)
+
+load_dotenv()
 
 SYMBOL = "XAUUSD"
 TIMEFRAME = mt5.TIMEFRAME_M5
@@ -60,13 +65,15 @@ volume = df['real_volume'].iloc[-1]
 momentum = df['close'].pct_change().mean()
 
 # News + sentiment
-fetcher = NewsFetcher()
+fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
 headlines = fetcher.fetch_news()
 sentiment = sentiment_handler.process_news(headlines)
 sent_score = sentiment['sentiment_score']
 
 # Predict strategy
-strategy_type = classifier.predict([volatility, volume, momentum, sent_score])
+input_df = pd.DataFrame([[volatility, volume, momentum, sent_score]], 
+                        columns=['volatility', 'volume', 'momentum', 'sentiment_score'])
+strategy_type = classifier.predict(input_df.iloc[0].tolist())
 
 # Run selected strategy
 if strategy_type == 'scalping':

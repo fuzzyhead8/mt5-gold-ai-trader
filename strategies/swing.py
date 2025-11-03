@@ -15,9 +15,9 @@ class SwingTradingStrategy:
 
         signals = []
         for i in range(1, len(data)):
-            if data['MACD'][i] > data['Signal_Line'][i] and data['MACD'][i-1] <= data['Signal_Line'][i-1]:
+            if data['MACD'].iloc[i] > data['Signal_Line'].iloc[i] and data['MACD'].iloc[i-1] <= data['Signal_Line'].iloc[i-1]:
                 signals.append('buy')
-            elif data['MACD'][i] < data['Signal_Line'][i] and data['MACD'][i-1] >= data['Signal_Line'][i-1]:
+            elif data['MACD'].iloc[i] < data['Signal_Line'].iloc[i] and data['MACD'].iloc[i-1] >= data['Signal_Line'].iloc[i-1]:
                 signals.append('sell')
             else:
                 signals.append('hold')

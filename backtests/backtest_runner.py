@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pandas as pd
 from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
