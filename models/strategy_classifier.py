@@ -14,10 +14,13 @@ class StrategyClassifier:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.model.fit(X_train, y_train)
         predictions = self.model.predict(X_test)
-        print(classification_report(y_test, predictions))
+        print(classification_report(y_test, predictions, zero_division=0))
 
     def predict(self, input_features):
-        return self.model.predict([input_features])[0]
+        if isinstance(input_features, pd.DataFrame):
+            return self.model.predict(input_features)[0]
+        else:
+            return self.model.predict([input_features])[0]
 
     def save_model(self, path="strategy_classifier.pkl"):
         joblib.dump(self.model, path)

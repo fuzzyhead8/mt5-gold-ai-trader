@@ -15,10 +15,13 @@ class BacktestRunner:
 
     def _select_strategy(self, strategy_type):
         if strategy_type == 'scalping':
+            print("Using Scalping Strategy")
             return ScalpingStrategy(self.symbol)
         elif strategy_type == 'day_trading':
+            print("Using Day Trading Strategy")
             return DayTradingStrategy(self.symbol)
         elif strategy_type == 'swing':
+            print("Using Swing Trading Strategy")
             return SwingTradingStrategy(self.symbol)
         else:
             raise ValueError("Invalid strategy type")

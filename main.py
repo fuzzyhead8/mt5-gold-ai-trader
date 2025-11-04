@@ -46,11 +46,11 @@ trend_model = TrendPredictor()
 
 # Load training for classifier (example data, should be persisted in real case)
 classifier.train(pd.DataFrame({
-    "volatility": [0.5, 1.2, 0.3],
-    "volume": [100000, 300000, 50000],
-    "momentum": [1.1, -0.8, 0.4],
-    "sentiment_score": [0.9, -0.6, 0.2],
-    "strategy": ["swing", "scalping", "day_trading"]
+    "volatility": [0.3, 0.4, 0.2, 0.5, 0.1, 1.2, 1.5, 1.0, 1.3, 1.1, 0.8, 0.9, 0.7, 0.6, 0.85],
+    "volume": [50000, 60000, 40000, 70000, 30000, 300000, 350000, 250000, 320000, 280000, 150000, 180000, 120000, 160000, 140000],
+    "momentum": [0.4, 0.5, 0.3, 0.6, 0.2, -0.8, -1.0, -0.7, -0.9, -0.6, 1.1, 1.2, 0.9, 1.0, 0.95],
+    "sentiment_score": [0.2, 0.3, 0.1, 0.4, 0.0, 0.9, 1.0, 0.8, 0.95, 0.85, -0.6, -0.5, -0.7, -0.4, -0.55],
+    "strategy": ["swing"]*5 + ["scalping"]*5 + ["day_trading"]*5
 }))
 
 # Get latest price data
@@ -73,7 +73,7 @@ sent_score = sentiment['sentiment_score']
 # Predict strategy
 input_df = pd.DataFrame([[volatility, volume, momentum, sent_score]], 
                         columns=['volatility', 'volume', 'momentum', 'sentiment_score'])
-strategy_type = classifier.predict(input_df.iloc[0].tolist())
+strategy_type = classifier.predict(input_df)[0]
 
 # Run selected strategy
 if strategy_type == 'scalping':
