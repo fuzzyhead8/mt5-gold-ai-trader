@@ -29,9 +29,10 @@ logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 class TradingBot:
-    def __init__(self, symbol="XAUUSD", bars=200):
+    def __init__(self, symbol="XAUUSD", bars=200, manual_strategy=None):
         self.symbol = symbol
         self.bars = bars
+        self.manual_strategy = manual_strategy
         self.classifier = StrategyClassifier()
         self.sentiment_handler = NewsSentimentHandler()
         self.lot_optimizer = LotSizeOptimizer()
@@ -106,44 +107,63 @@ class TradingBot:
         if self.stop_event.is_set():
             return
 
-        # Predict strategy first to determine timeframe
-        # Fetch recent data for prediction (use M1 for quick prediction)
-        m1_timeframe = mt5.TIMEFRAME_M1
-        data = mt5.copy_rates_from_pos(self.symbol, m1_timeframe, 0, self.bars)
-        if data is None:
-            logging.error("Failed to fetch data for prediction")
-            return
-        df = pd.DataFrame(data)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('time', inplace=True)
+        sent_score = 0  # Default
+        if self.manual_strategy:
+            strategy_type = self.manual_strategy
+            logging.info(f"Manual strategy: {strategy_type}")
 
-        fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
-        articles = fetcher.fetch_news()
-        sentiment_results = self.sentiment_handler.process_news(articles)
-        sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+            # Fetch sentiment for signals and logging
+            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
+            articles = fetcher.fetch_news()
+            sentiment_results = self.sentiment_handler.process_news(articles)
+            sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
 
-        predicted_strat = self.get_strategy(df, sent_score)
-        strategy_type = predicted_strat.__class__.__name__.replace('Strategy', '').lower()
-        logging.info(f"Predicted strategy: {strategy_type}")
+            # Instantiate strategy based on manual
+            if strategy_type == 'scalping':
+                predicted_strat = ScalpingStrategy(self.symbol)
+            elif strategy_type == 'day_trading':
+                predicted_strat = DayTradingStrategy(self.symbol)
+            else:
+                predicted_strat = SwingTradingStrategy(self.symbol)
+        else:
+            # Auto mode: Predict strategy first to determine timeframe
+            # Fetch recent data for prediction (use M1 for quick prediction)
+            m1_timeframe = mt5.TIMEFRAME_M1
+            data = mt5.copy_rates_from_pos(self.symbol, m1_timeframe, 0, self.bars)
+            if data is None:
+                logging.error("Failed to fetch data for prediction")
+                return
+            df = pd.DataFrame(data)
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            df.set_index('time', inplace=True)
+
+            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
+            articles = fetcher.fetch_news()
+            sentiment_results = self.sentiment_handler.process_news(articles)
+            sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+
+            predicted_strat = self.get_strategy(df, sent_score)
+            strategy_type = predicted_strat.__class__.__name__.replace('Strategy', '').lower()
+            logging.info(f"Predicted strategy: {strategy_type}")
 
         # Determine timeframe and sleep based on predicted strategy
         if strategy_type == 'scalping':
             timeframe = mt5.TIMEFRAME_M1
             sleep_time = 60  # 1 min
-            sl_pips, tp_pips = 10, 20
-            min_distance_pips = 1.0
+            sl_pips, tp_pips = 50, 80  # Increased for XAUUSD minimum requirements
+            min_distance_pips = 30.0  # Much higher minimum for Gold
             strategy_name = "scalping"
         elif strategy_type == 'day_trading':
             timeframe = mt5.TIMEFRAME_M15
             sleep_time = 900  # 15 min
             sl_pips, tp_pips = 100, 200
-            min_distance_pips = 5.0
+            min_distance_pips = 40.0  # Higher minimum for Gold
             strategy_name = "day_trading"
         else:  # swing
             timeframe = mt5.TIMEFRAME_M5
             sleep_time = 300  # 5 min
-            sl_pips, tp_pips = 50, 125
-            min_distance_pips = 2.0
+            sl_pips, tp_pips = 80, 160  # Increased for better Gold trading
+            min_distance_pips = 35.0  # Higher minimum for Gold
             strategy_name = "swing"
 
         logging.info(f"Using {timeframe} timeframe for {strategy_name} iteration...")
@@ -168,7 +188,13 @@ class TradingBot:
                 return
             point = symbol_info.point
             digits = symbol_info.digits
-            min_distance = symbol_info.trade_stops_level * point if symbol_info.trade_stops_level > 0 else min_distance_pips * point
+            
+            # Get broker's minimum stop distance
+            broker_min_distance = symbol_info.trade_stops_level * point if symbol_info.trade_stops_level > 0 else 0
+            # Use the larger of broker requirement or our minimum
+            min_distance = max(broker_min_distance, min_distance_pips * point)
+            
+            logging.info(f"Broker min distance: {broker_min_distance/point:.1f} pips, Our min: {min_distance_pips} pips, Using: {min_distance/point:.1f} pips")
 
             tick = mt5.symbol_info_tick(self.symbol)
             if tick is None:
@@ -177,10 +203,22 @@ class TradingBot:
             price = tick.ask if latest_signal == 'buy' else tick.bid
             price = round(price, digits)
 
+            # Calculate distances ensuring they meet minimum requirements
             sl_distance = max(sl_pips * point, min_distance)
-            tp_distance = tp_pips * point
+            tp_distance = max(tp_pips * point, min_distance)  # TP also needs minimum distance
+            
             stop_loss = round(price - sl_distance if latest_signal == 'buy' else price + sl_distance, digits)
             take_profit = round(price + tp_distance if latest_signal == 'buy' else price - tp_distance, digits)
+            
+            # Validate stop distances
+            actual_sl_distance = abs(stop_loss - price)
+            actual_tp_distance = abs(take_profit - price)
+            
+            if actual_sl_distance < min_distance or actual_tp_distance < min_distance:
+                logging.error(f"Stop distances too small - SL: {actual_sl_distance/point:.1f} pips, TP: {actual_tp_distance/point:.1f} pips, Min required: {min_distance/point:.1f} pips")
+                return
+                
+            logging.info(f"Trade levels - Price: {price}, SL: {stop_loss} ({actual_sl_distance/point:.1f} pips), TP: {take_profit} ({actual_tp_distance/point:.1f} pips)")
 
             lot = self.lot_optimizer.optimize(
                 balance=self.acc_info['balance'],
@@ -266,9 +304,10 @@ class TradingBot:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MT5 Gold AI Trader with Dynamic Strategy Selection')
-    parser.add_argument('--symbol', type=str, default='XAUUSD', help='Trading symbol (default: XAUUSD)')
-    parser.add_argument('--bars', type=int, default=200, help='Number of historical bars to fetch (default: 200)')
+    parser.add_argument('symbol', nargs='?', type=str, default='XAUUSD', help='Trading symbol (default: XAUUSD)')
+    parser.add_argument('bars', nargs='?', type=int, default=200, help='Number of historical bars to fetch (default: 200)')
+    parser.add_argument('strategy', nargs='?', type=str, default='auto', choices=['auto', 'scalping', 'swing', 'day_trading'], help='Trading strategy (auto for AI prediction, or specify scalping/swing/day_trading)')
     args = parser.parse_args()
 
-    bot = TradingBot(symbol=args.symbol, bars=args.bars)
+    bot = TradingBot(symbol=args.symbol, bars=args.bars, manual_strategy=args.strategy if args.strategy != 'auto' else None)
     bot.run()

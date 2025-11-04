@@ -1,9 +1,11 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from joblib import dump
 from models.strategy_classifier import StrategyClassifier
-import os
 import glob
 from dotenv import load_dotenv
 from news_module.news_fetcher import NewsFetcher
@@ -22,7 +24,7 @@ if len(data_files) < 3:
 
 tf_to_strategy = {
     'M1': 'scalping',
-    'M5': 'swing',
+    'H4': 'swing',
     'M15': 'day_trading'
 }
 
