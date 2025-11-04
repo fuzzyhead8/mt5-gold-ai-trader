@@ -20,6 +20,7 @@ from mt5_connector.order_manager import OrderManager
 from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
+from strategies.golden_scalping import GoldenScalpingStrategy
 
 import os
 from dotenv import load_dotenv
@@ -100,6 +101,8 @@ class TradingBot:
             return ScalpingStrategy(self.symbol)
         elif strategy_type == 'day_trading':
             return DayTradingStrategy(self.symbol)
+        elif strategy_type == 'golden':
+            return GoldenScalpingStrategy(self.symbol)
         else:
             return SwingTradingStrategy(self.symbol)
 
@@ -123,6 +126,8 @@ class TradingBot:
                 predicted_strat = ScalpingStrategy(self.symbol)
             elif strategy_type == 'day_trading':
                 predicted_strat = DayTradingStrategy(self.symbol)
+            elif strategy_type == 'golden':
+                predicted_strat = GoldenScalpingStrategy(self.symbol)
             else:
                 predicted_strat = SwingTradingStrategy(self.symbol)
         else:
@@ -153,6 +158,12 @@ class TradingBot:
             sl_pips, tp_pips = 50, 80  # Increased for XAUUSD minimum requirements
             min_distance_pips = 30.0  # Much higher minimum for Gold
             strategy_name = "scalping"
+        elif strategy_type == 'golden':
+            timeframe = mt5.TIMEFRAME_M15  # M15 for GOLDEN FORMULA
+            sleep_time = 900  # 15 min - optimized for signal quality
+            sl_pips, tp_pips = 60, 120  # Optimized for GOLDEN FORMULA risk/reward
+            min_distance_pips = 35.0  # Professional-grade minimum distance
+            strategy_name = "golden"
         elif strategy_type == 'day_trading':
             timeframe = mt5.TIMEFRAME_M15
             sleep_time = 900  # 15 min
@@ -306,7 +317,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MT5 Gold AI Trader with Dynamic Strategy Selection')
     parser.add_argument('symbol', nargs='?', type=str, default='XAUUSD', help='Trading symbol (default: XAUUSD)')
     parser.add_argument('bars', nargs='?', type=int, default=200, help='Number of historical bars to fetch (default: 200)')
-    parser.add_argument('strategy', nargs='?', type=str, default='auto', choices=['auto', 'scalping', 'swing', 'day_trading'], help='Trading strategy (auto for AI prediction, or specify scalping/swing/day_trading)')
+    parser.add_argument('strategy', nargs='?', type=str, default='auto', choices=['auto', 'scalping', 'swing', 'day_trading', 'golden'], help='Trading strategy (auto for AI prediction, or specify scalping/swing/day_trading/golden)')
     args = parser.parse_args()
 
     bot = TradingBot(symbol=args.symbol, bars=args.bars, manual_strategy=args.strategy if args.strategy != 'auto' else None)

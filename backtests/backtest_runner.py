@@ -5,6 +5,8 @@ import pandas as pd
 from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
+from strategies.golden_scalping import GoldenScalpingStrategy
+from strategies.golden_risk_manager import GoldenRiskManager
 import matplotlib.pyplot as plt
 from datetime import datetime
 
@@ -14,7 +16,7 @@ class BacktestRunner:
         Initialize BacktestRunner with strategy parameter
         
         Args:
-            strategy_param: 'all', 'daily', 'swing', 'scalping'
+            strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden'
             symbol: Trading symbol (default: 'XAUUSD')
         """
         self.symbol = symbol
@@ -25,7 +27,7 @@ class BacktestRunner:
         self._load_data()
         
         # Validate strategy parameter
-        valid_strategies = ['all', 'daily', 'swing', 'scalping']
+        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden']
         if self.strategy_param not in valid_strategies:
             raise ValueError(f"Invalid strategy parameter. Must be one of: {valid_strategies}")
 
@@ -48,6 +50,8 @@ class BacktestRunner:
             return DayTradingStrategy(self.symbol)
         elif strategy_type == 'swing':
             return SwingTradingStrategy(self.symbol)
+        elif strategy_type == 'golden':
+            return GoldenScalpingStrategy(self.symbol)
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
 
@@ -184,7 +188,7 @@ class BacktestRunner:
             print(f"Data period: {self.data.index[0]} to {self.data.index[-1]}")
             
             # Run all strategies
-            for strategy in ['scalping', 'daily', 'swing']:
+            for strategy in ['scalping', 'daily', 'swing', 'golden']:
                 result, metrics = self._run_single_strategy(strategy)
                 results_dict[strategy] = (result, metrics)
             
@@ -228,7 +232,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='Run MT5 Gold AI Trader Backtest')
-    parser.add_argument('--strategy', '-s', choices=['all', 'daily', 'swing', 'scalping'], 
+    parser.add_argument('--strategy', '-s', choices=['all', 'daily', 'swing', 'scalping', 'golden'], 
                        default='all', help='Strategy to run (default: all)')
     parser.add_argument('--symbol', default='XAUUSD', help='Trading symbol (default: XAUUSD)')
     
