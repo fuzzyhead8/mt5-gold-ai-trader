@@ -7,16 +7,16 @@ class ScalpingStrategy:
         self.min_volume = 50  # Moderate minimum tick volume 
         self.volatility_threshold = 2.5  # Dynamic volatility threshold
         
-    def _calculate_rsi(self, prices, window=7):
-        """Calculate RSI optimized for scalping"""
+    def _calculate_rsi(self, prices, window=5):
+        """Calculate RSI optimized for scalping (faster response)"""
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
         rs = gain / loss
         return 100 - (100 / (1 + rs))
     
-    def _calculate_bollinger_bands(self, prices, window=10, num_std=1.5):
-        """Calculate Bollinger Bands for scalping (tighter bands)"""
+    def _calculate_bollinger_bands(self, prices, window=12, num_std=1.8):
+        """Calculate Bollinger Bands optimized for gold scalping"""
         rolling_mean = prices.rolling(window=window).mean()
         rolling_std = prices.rolling(window=window).std()
         upper_band = rolling_mean + (rolling_std * num_std)
@@ -50,9 +50,13 @@ class ScalpingStrategy:
                     raise ValueError(f"Required column '{col}' missing from data")
         
         # Calculate technical indicators optimized for scalping
-        data['ema_fast'] = data['close'].ewm(span=3).mean()  # Very fast EMA
-        data['ema_slow'] = data['close'].ewm(span=8).mean()   # Slow EMA
-        data['rsi'] = self._calculate_rsi(data['close'], window=7)
+        data['ema_fast'] = data['close'].ewm(span=5).mean()  # Fast EMA (optimized)
+        data['ema_slow'] = data['close'].ewm(span=13).mean()   # Slow EMA (Fibonacci number)
+        data['rsi'] = self._calculate_rsi(data['close'], window=5)
+        
+        # Additional trend confirmation
+        data['ema_trend'] = data['close'].ewm(span=21).mean()  # Longer trend filter
+        data['trend_strength'] = (data['close'] - data['ema_trend']) / data['ema_trend']
         
         # Bollinger Bands for overbought/oversold conditions
         data['bb_upper'], data['bb_lower'], data['bb_middle'] = self._calculate_bollinger_bands(data['close'])
@@ -67,7 +71,11 @@ class ScalpingStrategy:
         
         # Momentum indicators
         data['momentum_3'] = self._calculate_momentum(data['close'], 3)
+        data['momentum_5'] = self._calculate_momentum(data['close'], 5)
         data['price_position'] = (data['close'] - data['bb_lower']) / (data['bb_upper'] - data['bb_lower'])
+        
+        # Price action indicators
+        data['price_vs_ema'] = (data['close'] - data['ema_slow']) / data['ema_slow']
         
         # Generate signals
         signal = []
@@ -91,10 +99,13 @@ class ScalpingStrategy:
             bb_lower = data['bb_lower'].iloc[i]
             bb_middle = data['bb_middle'].iloc[i]
             momentum = data['momentum_3'].iloc[i]
+            momentum_5 = data['momentum_5'].iloc[i]
             tick_volume = data['tick_volume'].iloc[i]
             volatility = data['volatility'].iloc[i]
             atr = data['atr'].iloc[i]
             price_pos = data['price_position'].iloc[i]
+            trend_strength = data['trend_strength'].iloc[i]
+            price_vs_ema = data['price_vs_ema'].iloc[i]
             
             # Skip if insufficient volume or extreme volatility (balanced filtering)
             if (tick_volume < self.min_volume or 
@@ -135,10 +146,10 @@ class ScalpingStrategy:
                 volatility < data['volatility'].rolling(20).mean().iloc[i] * 1.3
             ]
             
-            # Require 4 out of 6 conditions for signal (balanced approach)
-            if sum(buy_conditions) >= 4:
+            # Balanced signal logic for optimal trade frequency
+            if sum(buy_conditions) >= 4:  # Back to working threshold
                 signal.append('buy')
-            elif sum(sell_conditions) >= 4:
+            elif sum(sell_conditions) >= 4:  # Back to working threshold
                 signal.append('sell')
             else:
                 signal.append('hold')
