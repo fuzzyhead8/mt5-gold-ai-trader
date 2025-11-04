@@ -15,14 +15,14 @@ class ScalpingStrategy:
         signal = []
         for i in range(1, len(data)):
             if (
-                data['ma_fast'][i] > data['ma_slow'][i] and
-                data['ma_fast'][i-1] <= data['ma_slow'][i-1] and
-                data['volatility'][i] < data['close'].std()/2
+                data['ma_fast'].iloc[i] > data['ma_slow'].iloc[i] and
+                data['ma_fast'].iloc[i-1] <= data['ma_slow'].iloc[i-1] and
+                data['volatility'].iloc[i] < data['close'].std()/2
             ):
                 signal.append('buy')
             elif (
-                data['ma_fast'][i] < data['ma_slow'][i] and
-                data['ma_fast'][i-1] >= data['ma_slow'][i-1]
+                data['ma_fast'].iloc[i] < data['ma_slow'].iloc[i] and
+                data['ma_fast'].iloc[i-1] >= data['ma_slow'].iloc[i-1]
             ):
                 signal.append('sell')
             else:

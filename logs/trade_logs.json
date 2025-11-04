@@ -1,0 +1,64 @@
+{
+  "trades": [
+    {
+      "timestamp": "2025-11-04T18:50:06.824305Z",
+      "symbol": "XAUUSD",
+      "action": "buy",
+      "entry_price": 3939.01,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "scalping",
+      "sentiment": "neutral",
+      "duration_minutes": 0
+    },
+    {
+      "timestamp": "2025-11-04T19:11:20.281016Z",
+      "symbol": "XAUUSD",
+      "action": "buy",
+      "entry_price": 3939.77,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "scalping",
+      "sentiment": "bullish",
+      "duration_minutes": 0
+    },
+    {
+      "timestamp": "2025-11-04T19:24:01.757544Z",
+      "symbol": "XAUUSD",
+      "action": "buy",
+      "entry_price": 3942.77,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "swing",
+      "sentiment": "bullish",
+      "duration_minutes": 0
+    },
+    {
+      "timestamp": "2025-11-04T19:30:32.064609Z",
+      "symbol": "XAUUSD",
+      "action": "sell",
+      "entry_price": 3940.96,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "scalping",
+      "sentiment": "neutral",
+      "duration_minutes": 0
+    },
+    {
+      "timestamp": "2025-11-04T19:43:57.571122Z",
+      "symbol": "XAUUSD",
+      "action": "buy",
+      "entry_price": 3936.79,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "day_trading",
+      "sentiment": "neutral",
+      "duration_minutes": 0
+    }
+  ]
+}
