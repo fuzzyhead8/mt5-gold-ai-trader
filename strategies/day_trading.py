@@ -4,15 +4,15 @@ import pandas as pd
 class DayTradingStrategy:
     def __init__(self, symbol):
         self.symbol = symbol
-        # Parameters optimized for M15 timeframe (daily trading)
-        self.rsi_period = 21  # Longer period for more stable signals
-        self.rsi_overbought = 75  # More extreme levels
-        self.rsi_oversold = 25
+        # Parameters optimized for M15 timeframe (daily trading) - Made less conservative
+        self.rsi_period = 14  # Shorter period for more responsive signals
+        self.rsi_overbought = 65  # Less extreme levels for more signals
+        self.rsi_oversold = 35
         self.ema_fast = 12  # For trend filtering
         self.ema_slow = 26
-        self.volume_threshold = 80  # Minimum volume threshold
+        self.volume_threshold = 50  # Lower minimum volume threshold
 
-    def _calculate_rsi(self, prices, window=21):
+    def _calculate_rsi(self, prices, window=14):
         """Calculate RSI with proper handling of edge cases"""
         delta = prices.diff()
         gain = delta.where(delta > 0, 0).rolling(window=window, min_periods=window).mean()
@@ -81,42 +81,30 @@ class DayTradingStrategy:
                 signals.append('hold')
                 continue
             
-            # Time-based filtering
-            current_time = data.index[i] if hasattr(data, 'index') else None
-            if current_time and not self._is_valid_signal_time(current_time):
-                signals.append('hold')
-                continue
+            # Note: Removed time-based filtering to allow more signals during training
                 
             # Enhanced signal logic with multiple confirmations
             signal = 'hold'
             
-            # BUY conditions (trend-following with RSI oversold confirmation)
-            buy_conditions = [
-                rsi < self.rsi_oversold,  # RSI oversold
-                trend == 1,  # Uptrend (EMA fast > EMA slow)
-                volume_ratio > 1.0,  # Above average volume
-                volatility < data['volatility'].rolling(50).mean().iloc[i] * 1.5  # Not extremely volatile
-            ]
+            # More balanced signal generation with tighter controls
             
-            # SELL conditions (trend-following with RSI overbought confirmation)  
-            sell_conditions = [
-                rsi > self.rsi_overbought,  # RSI overbought
-                trend == -1,  # Downtrend (EMA fast < EMA slow)
-                volume_ratio > 1.0,  # Above average volume
-                volatility < data['volatility'].rolling(50).mean().iloc[i] * 1.5  # Not extremely volatile
-            ]
-            
-            # Require at least 3 out of 4 conditions to be met
-            if sum(buy_conditions) >= 3:
-                # Additional check: ensure we're not in extreme volatility
-                recent_volatility = data['volatility'].iloc[max(0, i-5):i+1].mean()
-                if recent_volatility < data['volatility'].iloc[i] * 1.2:
-                    signal = 'buy'
-            elif sum(sell_conditions) >= 3:
-                # Additional check: ensure we're not in extreme volatility
-                recent_volatility = data['volatility'].iloc[max(0, i-5):i+1].mean()
-                if recent_volatility < data['volatility'].iloc[i] * 1.2:
-                    signal = 'sell'
+            # BUY conditions - require RSI oversold AND trending up
+            if (rsi < self.rsi_oversold and trend == 1 and 
+                volume_ratio > 1.0 and 
+                data['EMA_fast'].iloc[i] > data['EMA_fast'].iloc[i-1]):  # EMA fast rising
+                signal = 'buy'
+                
+            # SELL conditions - require RSI overbought AND trending down
+            elif (rsi > self.rsi_overbought and trend == -1 and 
+                  volume_ratio > 1.0 and 
+                  data['EMA_fast'].iloc[i] < data['EMA_fast'].iloc[i-1]):  # EMA fast falling
+                signal = 'sell'
+                
+            # Additional opportunity - RSI reversal signals
+            elif rsi < 30 and trend == 1:  # Strong oversold in uptrend
+                signal = 'buy'
+            elif rsi > 70 and trend == -1:  # Strong overbought in downtrend
+                signal = 'sell'
             
             signals.append(signal)
 

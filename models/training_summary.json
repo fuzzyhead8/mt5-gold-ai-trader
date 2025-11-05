@@ -1,0 +1,15 @@
+{
+  "trained_models": [
+    "scalping",
+    "day_trading",
+    "golden",
+    "swing"
+  ],
+  "training_date": "2025-11-05T12:38:01.570332",
+  "model_files": {
+    "scalping": "models/scalping_signal.joblib",
+    "day_trading": "models/day_trading_signal.joblib",
+    "golden": "models/golden_signal.joblib",
+    "swing": "models/swing_signal.joblib"
+  }
+}

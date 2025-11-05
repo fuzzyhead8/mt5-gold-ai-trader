@@ -115,11 +115,18 @@ class TradingBot:
             strategy_type = self.manual_strategy
             logging.info(f"Manual strategy: {strategy_type}")
 
-            # Fetch sentiment for signals and logging
-            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
-            articles = fetcher.fetch_news()
-            sentiment_results = self.sentiment_handler.process_news(articles)
-            sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+            # Fetch sentiment for signals and logging with improved error handling
+            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
+            try:
+                articles = fetcher.fetch_news()
+                sentiment_results = self.sentiment_handler.process_news(articles)
+                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+                logging.info(f"Retrieved {len(articles)} news articles for sentiment analysis")
+            except Exception as e:
+                logging.warning(f"News fetch failed, using cached/fallback data: {e}")
+                articles = fetcher.get_cached_or_fallback()
+                sentiment_results = self.sentiment_handler.process_news(articles)
+                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
 
             # Instantiate strategy based on manual
             if strategy_type == 'scalping':
@@ -142,10 +149,18 @@ class TradingBot:
             df['time'] = pd.to_datetime(df['time'], unit='s')
             df.set_index('time', inplace=True)
 
-            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'))
-            articles = fetcher.fetch_news()
-            sentiment_results = self.sentiment_handler.process_news(articles)
-            sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+            try:
+                fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
+                articles = fetcher.fetch_news()
+                sentiment_results = self.sentiment_handler.process_news(articles)
+                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+                logging.info(f"Retrieved {len(articles)} news articles for sentiment analysis")
+            except Exception as e:
+                logging.warning(f"News fetch failed, using cached/fallback data: {e}")
+                fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
+                articles = fetcher.get_cached_or_fallback()
+                sentiment_results = self.sentiment_handler.process_news(articles)
+                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
 
             predicted_strat = self.get_strategy(df, sent_score)
             strategy_type = predicted_strat.__class__.__name__.replace('Strategy', '').lower()
