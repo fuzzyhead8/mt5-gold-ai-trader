@@ -15,9 +15,12 @@ class NewsFetcher:
         self.cache_file = "news_module/news_cache.json"
         self.cache_duration = timedelta(hours=cache_duration_hours)
         self.last_request_time = 0
-        self.min_request_interval = 1.0  # Minimum seconds between requests
-        self.max_retries = 3
-        self.base_delay = 2  # Base delay for exponential backoff
+        self.min_request_interval = 120.0  # 2 minutes between requests - much more conservative
+        self.max_retries = 2  # Reduced retries
+        self.base_delay = 300  # 5 minute base delay for exponential backoff
+        self.daily_request_count = 0
+        self.daily_limit = 50  # Conservative daily limit (NewsAPI free tier allows 100/day)
+        self.last_reset_date = datetime.now().date()
         
         # Fallback news data for when API fails
         self.fallback_news = [
@@ -61,14 +64,26 @@ class NewsFetcher:
             logging.warning(f"Failed to save news cache: {e}")
 
     def _rate_limit(self) -> None:
-        """Implement rate limiting between requests"""
+        """Implement conservative rate limiting between requests"""
+        # Reset daily counter if it's a new day
+        current_date = datetime.now().date()
+        if current_date > self.last_reset_date:
+            self.daily_request_count = 0
+            self.last_reset_date = current_date
+            
+        # Check daily limit
+        if self.daily_request_count >= self.daily_limit:
+            logging.warning(f"Daily API request limit ({self.daily_limit}) reached. Using cache/fallback only.")
+            raise Exception("Daily API limit exceeded")
+        
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         if time_since_last < self.min_request_interval:
             sleep_time = self.min_request_interval - time_since_last
-            logging.info(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            logging.info(f"Rate limiting: sleeping for {sleep_time:.0f} seconds")
             time.sleep(sleep_time)
         self.last_request_time = time.time()
+        self.daily_request_count += 1
 
     def _make_request_with_retry(self, params: Dict) -> Optional[List[Dict]]:
         """Make API request with exponential backoff retry logic"""
@@ -94,11 +109,11 @@ class NewsFetcher:
                 elif response.status_code == 429:  # Too Many Requests
                     retry_after = response.headers.get('Retry-After')
                     if retry_after:
-                        wait_time = int(retry_after)
+                        wait_time = max(int(retry_after), 600)  # At least 10 minutes
                     else:
-                        wait_time = self.base_delay * (2 ** attempt)
+                        wait_time = self.base_delay * (2 ** attempt)  # Starts at 5 minutes, then 10, then 20
                     
-                    logging.warning(f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{self.max_retries}")
+                    logging.error(f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{self.max_retries}")
                     time.sleep(wait_time)
                     continue
                 
@@ -122,25 +137,37 @@ class NewsFetcher:
         
         return None
 
-    def fetch_news(self, from_date=None, to_date=None, page_size=20) -> List[Dict]:
+    def fetch_news(self, from_date=None, to_date=None, page_size=10) -> List[Dict]:
         """
-        Fetch news with improved error handling, caching, and rate limiting
-        Reduced default page_size from 100 to 20 to be more API-friendly
+        Fetch news with very conservative error handling, caching, and rate limiting
+        Much reduced default page_size to minimize API usage
         """
-        # Try to load from cache first
+        # Always try to load from cache first - even if expired
         cached_articles = self._load_cache()
         if cached_articles:
+            logging.info("Using cached news data to avoid API calls")
             return cached_articles
+
+        # Check daily limit before attempting API call
+        current_date = datetime.now().date()
+        if current_date > self.last_reset_date:
+            self.daily_request_count = 0
+            self.last_reset_date = current_date
+            
+        if self.daily_request_count >= self.daily_limit:
+            logging.warning(f"Daily API request limit ({self.daily_limit}) reached. Using fallback data.")
+            return self.fallback_news
 
         # If no valid API key, return fallback
         if not self.api_key or self.api_key == "your_newsapi_key_here":
             logging.warning("No valid API key provided. Using fallback news data.")
             return self.fallback_news
 
+        # Very conservative API parameters
         params = {
             "q": self.query,
             "language": self.language,
-            "pageSize": min(page_size, 20),  # Limit to 20 to avoid rate limits
+            "pageSize": min(page_size, 10),  # Much smaller limit
             "sortBy": "publishedAt",
             "apiKey": self.api_key
         }
@@ -150,15 +177,19 @@ class NewsFetcher:
         if to_date:
             params["to"] = to_date
 
-        # Try to fetch from API
-        articles = self._make_request_with_retry(params)
-        
-        if articles:
-            self._save_cache(articles)
-            logging.info(f"Successfully fetched {len(articles)} news articles")
-            return articles
-        else:
-            logging.warning("All API attempts failed. Using fallback news data.")
+        # Try to fetch from API with conservative approach
+        try:
+            articles = self._make_request_with_retry(params)
+            
+            if articles:
+                self._save_cache(articles)
+                logging.info(f"Successfully fetched {len(articles)} news articles (API calls today: {self.daily_request_count})")
+                return articles
+            else:
+                logging.warning("API attempts failed. Using fallback news data.")
+                return self.fallback_news
+        except Exception as e:
+            logging.warning(f"News fetch exception: {e}. Using fallback data.")
             return self.fallback_news
 
     def get_cached_or_fallback(self) -> List[Dict]:

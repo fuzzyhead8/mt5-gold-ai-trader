@@ -7,6 +7,7 @@ import threading
 import argparse
 import signal
 import sys
+import io
 import json
 from datetime import datetime
 from models.strategy_classifier import StrategyClassifier
@@ -20,7 +21,7 @@ from mt5_connector.order_manager import OrderManager
 from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
-from strategies.golden_scalping import GoldenScalpingStrategy
+from strategies.golden_scalping_simplified import GoldenScalpingStrategySimplified
 
 import os
 from dotenv import load_dotenv
@@ -28,6 +29,11 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
+
+# Fix console encoding for Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 class TradingBot:
     def __init__(self, symbol="XAUUSD", bars=200, manual_strategy=None):
@@ -102,7 +108,7 @@ class TradingBot:
         elif strategy_type == 'day_trading':
             return DayTradingStrategy(self.symbol)
         elif strategy_type == 'golden':
-            return GoldenScalpingStrategy(self.symbol)
+            return GoldenScalpingStrategySimplified(self.symbol)
         else:
             return SwingTradingStrategy(self.symbol)
 
@@ -110,57 +116,93 @@ class TradingBot:
         if self.stop_event.is_set():
             return
 
-        sent_score = 0  # Default
+        # Initialize with fallback values
+        sent_score = 0  # Default neutral sentiment
+        error_count = 0
+        max_errors = 3
+        
         if self.manual_strategy:
             strategy_type = self.manual_strategy
             logging.info(f"Manual strategy: {strategy_type}")
 
-            # Fetch sentiment for signals and logging with improved error handling
-            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
+            # Fetch sentiment with improved error handling and rate limiting
+            fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=4)  # Longer cache
             try:
-                articles = fetcher.fetch_news()
-                sentiment_results = self.sentiment_handler.process_news(articles)
-                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
-                logging.info(f"Retrieved {len(articles)} news articles for sentiment analysis")
-            except Exception as e:
-                logging.warning(f"News fetch failed, using cached/fallback data: {e}")
+                # Only fetch news if cache is expired, otherwise use cached data
                 articles = fetcher.get_cached_or_fallback()
+                if not articles:
+                    logging.info("No cached news, attempting fresh fetch...")
+                    articles = fetcher.fetch_news(page_size=10)  # Reduced page size
+                
                 sentiment_results = self.sentiment_handler.process_news(articles)
                 sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+                logging.info(f"Using {len(articles)} news articles for sentiment analysis (score: {sent_score:.3f})")
+            except Exception as e:
+                error_count += 1
+                logging.warning(f"News processing failed ({error_count}/{max_errors}): {e}")
+                # Use neutral sentiment as fallback
+                sent_score = 0
 
-            # Instantiate strategy based on manual
+            # Instantiate strategy based on manual input
             if strategy_type == 'scalping':
                 predicted_strat = ScalpingStrategy(self.symbol)
             elif strategy_type == 'day_trading':
                 predicted_strat = DayTradingStrategy(self.symbol)
             elif strategy_type == 'golden':
-                predicted_strat = GoldenScalpingStrategy(self.symbol)
+                predicted_strat = GoldenScalpingStrategySimplified(self.symbol)
             else:
                 predicted_strat = SwingTradingStrategy(self.symbol)
         else:
             # Auto mode: Predict strategy first to determine timeframe
-            # Fetch recent data for prediction (use M1 for quick prediction)
+            # Fetch recent data for prediction with retry logic
             m1_timeframe = mt5.TIMEFRAME_M1
-            data = mt5.copy_rates_from_pos(self.symbol, m1_timeframe, 0, self.bars)
+            data = None
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries and data is None:
+                try:
+                    data = mt5.copy_rates_from_pos(self.symbol, m1_timeframe, 0, min(self.bars, 100))  # Reduced bars for prediction
+                    if data is None:
+                        error_count += 1
+                        retry_count += 1
+                        logging.warning(f"MT5 data fetch failed (attempt {retry_count}/{max_retries})")
+                        if retry_count < max_retries:
+                            time.sleep(2 ** retry_count)  # Exponential backoff
+                    break
+                except Exception as e:
+                    error_count += 1
+                    retry_count += 1
+                    logging.error(f"MT5 data fetch error (attempt {retry_count}/{max_retries}): {e}")
+                    if retry_count < max_retries:
+                        time.sleep(2 ** retry_count)
+            
             if data is None:
-                logging.error("Failed to fetch data for prediction")
+                logging.error(f"Failed to fetch MT5 data after {max_retries} attempts. Skipping iteration.")
+                # Wait longer before next attempt to avoid hammering failed connection
+                time.sleep(30)
                 return
+                
             df = pd.DataFrame(data)
             df['time'] = pd.to_datetime(df['time'], unit='s')
             df.set_index('time', inplace=True)
 
+            # Fetch sentiment with caching priority
             try:
-                fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
-                articles = fetcher.fetch_news()
-                sentiment_results = self.sentiment_handler.process_news(articles)
-                sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
-                logging.info(f"Retrieved {len(articles)} news articles for sentiment analysis")
-            except Exception as e:
-                logging.warning(f"News fetch failed, using cached/fallback data: {e}")
-                fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=2)
+                fetcher = NewsFetcher(api_key=os.getenv('NEWS_API_KEY'), cache_duration_hours=4)
+                # Always try cached first to avoid API limits
                 articles = fetcher.get_cached_or_fallback()
+                if not articles:
+                    logging.info("No cached news available, attempting fresh fetch...")
+                    articles = fetcher.fetch_news(page_size=10)
+                
                 sentiment_results = self.sentiment_handler.process_news(articles)
                 sent_score = np.mean([item['score'] for item in sentiment_results]) if sentiment_results else 0
+                logging.info(f"Using {len(articles)} news articles for sentiment analysis (score: {sent_score:.3f})")
+            except Exception as e:
+                error_count += 1
+                logging.warning(f"News processing failed ({error_count}/{max_errors}): {e}")
+                sent_score = 0
 
             predicted_strat = self.get_strategy(df, sent_score)
             strategy_type = predicted_strat.__class__.__name__.replace('Strategy', '').lower()
@@ -194,14 +236,43 @@ class TradingBot:
 
         logging.info(f"Using {timeframe} timeframe for {strategy_name} iteration...")
 
-        # Fetch data on selected timeframe
-        data = mt5.copy_rates_from_pos(self.symbol, timeframe, 0, self.bars)
+        # Fetch data on selected timeframe with retry logic
+        data = None
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries and data is None:
+            try:
+                data = mt5.copy_rates_from_pos(self.symbol, timeframe, 0, self.bars)
+                if data is None:
+                    error_count += 1
+                    retry_count += 1
+                    logging.warning(f"MT5 {timeframe} data fetch failed (attempt {retry_count}/{max_retries})")
+                    if retry_count < max_retries:
+                        time.sleep(2 ** retry_count)  # Exponential backoff
+                break
+            except Exception as e:
+                error_count += 1
+                retry_count += 1
+                logging.error(f"MT5 {timeframe} data fetch error (attempt {retry_count}/{max_retries}): {e}")
+                if retry_count < max_retries:
+                    time.sleep(2 ** retry_count)
+        
         if data is None:
-            logging.error(f"Failed to fetch {timeframe} data")
+            logging.error(f"Failed to fetch {timeframe} data after {max_retries} attempts. Skipping iteration.")
+            # Longer wait on persistent failures to avoid hammering
+            time.sleep(60)
             return
+            
         df = pd.DataFrame(data)
         df['time'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('time', inplace=True)
+        
+        # Check if we have enough data
+        if len(df) < 20:
+            logging.warning(f"Insufficient data received: {len(df)} bars. Skipping iteration.")
+            time.sleep(30)
+            return
 
         signals = predicted_strat.generate_signals(df)
         latest_signal = signals['signal'].iloc[-1]
@@ -291,10 +362,18 @@ class TradingBot:
             else:
                 logging.error(f"{strategy_name.capitalize()} trade failed: {result.retcode if result else 'No result'} - {result.comment if result else 'Unknown error'}")
 
+        # Implement adaptive sleep based on error count
+        base_sleep = sleep_time
+        if error_count > 0:
+            # Add extra delay if there were errors to prevent hammering failed services
+            adaptive_sleep = base_sleep + (error_count * 30)  # Add 30s per error
+            logging.warning(f"Errors detected ({error_count}), extending sleep to {adaptive_sleep}s")
+            sleep_time = min(adaptive_sleep, base_sleep * 3)  # Cap at 3x normal sleep
+        
         logging.info(f"{strategy_name.capitalize()} iteration completed. Sleeping for {sleep_time} seconds...")
         start = time.time()
         while time.time() - start < sleep_time and not self.stop_event.is_set():
-            time.sleep(0.1)
+            time.sleep(1)  # Use 1s intervals instead of 0.1s
 
 
 

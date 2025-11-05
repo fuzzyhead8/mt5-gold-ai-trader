@@ -4,12 +4,12 @@ class LotSizeOptimizer:
     def __init__(self, max_risk_percent=2):
         self.risk_model = RiskModel(max_risk_percent)
 
-    def optimize(self, balance, entry_price, stop_price, pip_value=10):
+    def optimize(self, balance, entry_price, stop_price, symbol="XAUUSD"):
         return self.risk_model.calculate_lot_size(
             balance=balance,
             entry_price=entry_price,
             stop_price=stop_price,
-            pip_value=pip_value
+            symbol=symbol
         )
 
 if __name__ == '__main__':
