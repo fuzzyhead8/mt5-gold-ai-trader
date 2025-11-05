@@ -228,8 +228,8 @@ class TradingBot:
             min_distance_pips = 40.0  # Higher minimum for Gold
             strategy_name = "day_trading"
         else:  # swing
-            timeframe = mt5.TIMEFRAME_M5
-            sleep_time = 300  # 5 min
+            timeframe = mt5.TIMEFRAME_H4
+            sleep_time = 3600  # 1 hour
             sl_pips, tp_pips = 80, 160  # Increased for better Gold trading
             min_distance_pips = 35.0  # Higher minimum for Gold
             strategy_name = "swing"

@@ -67,7 +67,7 @@ def main():
     """Main function to fetch and save historical prices."""
     parser = argparse.ArgumentParser(description='Fetch historical prices from MT5')
     parser.add_argument('--symbol', type=str, default='XAUUSD', help='Symbol to fetch (default: XAUUSD)')
-    parser.add_argument('--timeframe', type=str, default='M1', help='Timeframe: M1, M5, M15, D1, H4 (default: M1)')
+    parser.add_argument('--timeframe', type=str, default='M1', help='Timeframe: M1, M5, M15, M30, H1, H4, D1 (default: M1)')
     parser.add_argument('--count', type=int, default=1000, help='Number of bars to fetch (default: 1000)')
     args = parser.parse_args()
 
@@ -79,11 +79,13 @@ def main():
         'M1': mt5.TIMEFRAME_M1,
         'M5': mt5.TIMEFRAME_M5,
         'M15': mt5.TIMEFRAME_M15,
+        'M30': mt5.TIMEFRAME_M30,
+        'H1': mt5.TIMEFRAME_H1,
         'H4': mt5.TIMEFRAME_H4,
         'D1': mt5.TIMEFRAME_D1
     }
     if tf_str not in timeframe_map:
-        print(f"Invalid timeframe: {tf_str}. Supported: M1, M5, M15, D1")
+        print(f"Invalid timeframe: {tf_str}. Supported: M1, M5, M15, M30, H1, H4, D1")
         return
     timeframe = timeframe_map[tf_str]
 

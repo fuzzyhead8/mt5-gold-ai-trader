@@ -8,6 +8,7 @@ from strategies.swing import SwingTradingStrategy
 from strategies.golden_scalping import GoldenScalpingStrategy
 from strategies.golden_risk_manager import GoldenRiskManager
 import matplotlib.pyplot as plt
+import glob
 from datetime import datetime
 
 class BacktestRunner:
@@ -22,25 +23,30 @@ class BacktestRunner:
         self.symbol = symbol
         self.strategy_param = strategy_param.lower()
         self.data = None
-        
-        # Load the M15 data
-        self._load_data()
+        self.timeframe = None
         
         # Validate strategy parameter
         valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden']
         if self.strategy_param not in valid_strategies:
             raise ValueError(f"Invalid strategy parameter. Must be one of: {valid_strategies}")
 
-    def _load_data(self):
-        """Load the XAUUSD M15 data"""
+    def _load_data(self, timeframe: str):
+        """Load the XAUUSD data for given timeframe"""
         try:
-            csv_path = os.path.join(os.path.dirname(__file__), "XAUUSD_M15_20251104_214837.csv")
-            self.data = pd.read_csv(csv_path)
+            dir_path = os.path.dirname(__file__)
+            pattern = os.path.join(dir_path, f"XAUUSD_{timeframe}_*.csv")
+            files = glob.glob(pattern)
+            if not files:
+                raise FileNotFoundError(f"No XAUUSD_{timeframe}_*.csv found in {dir_path}")
+            # Get the most recent file
+            latest_file = max(files, key=os.path.getctime)
+            self.data = pd.read_csv(latest_file)
             self.data['time'] = pd.to_datetime(self.data['time'])
             self.data.set_index('time', inplace=True)
-            print(f"Loaded {len(self.data)} M15 candles from {self.data.index[0]} to {self.data.index[-1]}")
-        except FileNotFoundError:
-            raise FileNotFoundError("XAUUSD_M15_20251104_214837.csv not found in backtests directory")
+            self.timeframe = timeframe
+            print(f"Loaded {len(self.data)} {timeframe} candles from {self.data.index[0]} to {self.data.index[-1]} from {latest_file}")
+        except FileNotFoundError as e:
+            raise FileNotFoundError(str(e))
 
     def _get_strategy(self, strategy_type: str):
         """Get strategy instance based on type"""
@@ -54,6 +60,16 @@ class BacktestRunner:
             return GoldenScalpingStrategy(self.symbol)
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
+
+    def _get_timeframe(self, strategy: str) -> str:
+        """Get timeframe for strategy"""
+        mapping = {
+            'daily': 'M30',
+            'swing': 'H4',
+            'scalping': 'M1',
+            'golden': 'M15'
+        }
+        return mapping.get(strategy.lower(), 'M15')
 
     def _calculate_performance_metrics(self, results):
         """Calculate comprehensive performance metrics"""
@@ -107,6 +123,11 @@ class BacktestRunner:
         print(f"\nPerformance Metrics for {strategy_type.upper()}:")
         for metric, value in metrics.items():
             print(f"  {metric}: {value}")
+        
+        # Save results to CSV
+        output_path = os.path.join(os.path.dirname(__file__), f"{strategy_type}_backtest.csv")
+        result.to_csv(output_path)
+        print(f"Backtest results saved to {output_path}")
         
         return result, metrics
 
@@ -178,17 +199,16 @@ class BacktestRunner:
 
     def run(self):
         """Run backtest based on strategy parameter"""
-        if self.data is None:
-            raise ValueError("No data loaded")
-        
         results_dict = {}
         
         if self.strategy_param == 'all':
-            print(f"Running ALL strategies on {self.symbol} M15 data")
-            print(f"Data period: {self.data.index[0]} to {self.data.index[-1]}")
+            print(f"Running ALL strategies on {self.symbol} with respective timeframes")
             
             # Run all strategies
             for strategy in ['scalping', 'daily', 'swing', 'golden']:
+                timeframe = self._get_timeframe(strategy)
+                self._load_data(timeframe)
+                print(f"Data period for {strategy}: {self.data.index[0]} to {self.data.index[-1]}")
                 result, metrics = self._run_single_strategy(strategy)
                 results_dict[strategy] = (result, metrics)
             
@@ -206,6 +226,9 @@ class BacktestRunner:
                 
         else:
             # Run single strategy
+            timeframe = self._get_timeframe(self.strategy_param)
+            self._load_data(timeframe)
+            print(f"Data period: {self.data.index[0]} to {self.data.index[-1]}")
             result, metrics = self._run_single_strategy(self.strategy_param)
             results_dict[self.strategy_param] = (result, metrics)
         
