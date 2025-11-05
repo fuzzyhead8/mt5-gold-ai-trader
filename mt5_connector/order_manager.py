@@ -5,7 +5,7 @@ class OrderManager:
     def __init__(self, symbol):
         self.symbol = symbol
 
-    def close_position(self, ticket):
+    def close_position(self, ticket, comment="AI bot - close"):
         position = mt5.positions_get(ticket=ticket)
         if not position:
             logging.warning(f"No position found for ticket: {ticket}")
@@ -23,7 +23,7 @@ class OrderManager:
             "price": mt5.symbol_info_tick(self.symbol).ask if action_type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(self.symbol).bid,
             "deviation": 20,
             "magic": 123456,
-            "comment": "AI Bot Close",
+            "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }

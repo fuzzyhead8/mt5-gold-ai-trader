@@ -325,7 +325,10 @@ class TradingBot:
             lot = min(lot, 0.1)
             lot = round(lot, 2)
 
-            result = self.trade_executor.send_order(action=latest_signal, lot=lot, price=price, sl=stop_loss, tp=take_profit)
+            # Create comment with strategy name
+            order_comment = f"AI bot - {strategy_name}"
+            
+            result = self.trade_executor.send_order(action=latest_signal, lot=lot, price=price, sl=stop_loss, tp=take_profit, comment=order_comment)
             if result and result.retcode == mt5.TRADE_RETCODE_DONE:
                 logging.info(f"{strategy_name.capitalize()} trade executed successfully: {latest_signal} {lot} lots of {self.symbol} at {price}, SL: {stop_loss}, TP: {take_profit}")
 

@@ -5,7 +5,7 @@ class TradeExecutor:
     def __init__(self, symbol):
         self.symbol = symbol
 
-    def send_order(self, action, lot, price, sl, tp, deviation=20, magic=123456):
+    def send_order(self, action, lot, price, sl, tp, deviation=20, magic=123456, comment="AI Bot Trade"):
         action_type = mt5.ORDER_TYPE_BUY if action == 'buy' else mt5.ORDER_TYPE_SELL
 
         request = {
@@ -18,7 +18,7 @@ class TradeExecutor:
             "tp": tp,
             "deviation": deviation,
             "magic": magic,
-            "comment": "AI Bot Trade",
+            "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
