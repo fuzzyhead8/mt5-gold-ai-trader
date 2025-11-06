@@ -1119,6 +1119,20 @@
       "duration_minutes": 0,
       "ticket": 5526710448,
       "status": "open"
+    },
+    {
+      "timestamp": "2025-11-06T22:25:32.350949",
+      "symbol": "XAUUSD",
+      "action": "sell",
+      "entry_price": 3979.69,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "goldstorm",
+      "sentiment": "bearish",
+      "duration_minutes": 0,
+      "ticket": 5526767104,
+      "status": "open"
     }
   ]
 }

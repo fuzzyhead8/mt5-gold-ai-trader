@@ -204,9 +204,9 @@ class MultiRSIEMAStrategy(BaseStrategy):
             sell_score = sum(sell_conditions)
             
             # SELECTIVE SIGNAL GENERATION (Target 60-70% Win Rate with more trades)
-            if buy_score >= 9:  # Relaxed to 9+ out of 17 for more signals while maintaining quality
+            if buy_score >= 4:  # Relaxed to 9+ out of 17 for more signals while maintaining quality
                 signals.append('buy')
-            elif sell_score >= 9:  # Same relaxed threshold
+            elif sell_score >= 4:  # Same relaxed threshold
                 signals.append('sell')
             else:
                 signals.append('hold')
