@@ -159,3 +159,34 @@ class ScalpingStrategy:
         
         # Return enhanced data with all indicators
         return data[['close', 'signal', 'rsi', 'volume_ratio', 'volatility', 'ema_fast', 'ema_slow', 'bb_upper', 'bb_lower']]
+    
+    def get_strategy_config(self) -> dict:
+        """Return strategy configuration parameters"""
+        return {
+            "strategy_name": "Scalping",
+            "symbol": self.symbol,
+            "timeframe": "M1",
+            "parameters": {
+                "min_volume": self.min_volume,
+                "volatility_threshold": self.volatility_threshold,
+                "ema_fast_period": 5,
+                "ema_slow_period": 13,
+                "ema_trend_period": 21,
+                "rsi_period": 5,
+                "bb_window": 12,
+                "bb_std_dev": 1.8,
+                "momentum_window": 3,
+                "atr_window": 7,
+                "volume_ma_window": 10,
+                "volatility_window": 10
+            },
+            "signal_conditions": {
+                "rsi_buy_range": [30, 65],
+                "rsi_sell_range": [35, 70],
+                "bb_position_buy_threshold": 0.4,
+                "bb_position_sell_threshold": 0.6,
+                "volume_ratio_threshold": 1.0,
+                "conditions_required": 4
+            },
+            "description": "Fast scalping strategy optimized for 1-minute timeframe"
+        }

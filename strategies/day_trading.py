@@ -112,3 +112,29 @@ class DayTradingStrategy:
         
         # Return enhanced dataset with indicators
         return data[['close', 'RSI', 'EMA_fast', 'EMA_slow', 'signal', 'volume_ratio', 'volatility', 'trend']]
+    
+    def get_strategy_config(self) -> dict:
+        """Return strategy configuration parameters"""
+        return {
+            "strategy_name": "Day Trading",
+            "symbol": self.symbol,
+            "timeframe": "M15",
+            "parameters": {
+                "rsi_period": self.rsi_period,
+                "rsi_overbought": self.rsi_overbought,
+                "rsi_oversold": self.rsi_oversold,
+                "ema_fast_period": self.ema_fast,
+                "ema_slow_period": self.ema_slow,
+                "volume_threshold": self.volume_threshold,
+                "volume_ma_window": 20,
+                "volatility_window": 20,
+                "atr_window": 14
+            },
+            "signal_conditions": {
+                "rsi_extreme_levels": [30, 70],
+                "volume_ratio_threshold": 1.0,
+                "trend_confirmation_required": True,
+                "ema_momentum_required": True
+            },
+            "description": "Day trading strategy optimized for 15-minute timeframe with RSI and trend filtering"
+        }

@@ -146,3 +146,30 @@ class GoldenScalpingStrategySimplified:
                       'price_momentum', 'ema_fast', 'ema_slow']
         
         return data[return_cols]
+    
+    def get_strategy_config(self) -> dict:
+        """Return strategy configuration parameters"""
+        return {
+            "strategy_name": "Golden Scalping Simplified",
+            "symbol": self.symbol,
+            "timeframe": "M5",
+            "parameters": {
+                "min_volume": self.min_volume,
+                "ema_fast_period": 8,
+                "ema_slow_period": 21,
+                "rsi_period": 14,
+                "macd_fast": 12,
+                "macd_slow": 26,
+                "macd_signal": 9,
+                "price_momentum_lookback": 3,
+                "volume_average_period": 20
+            },
+            "signal_conditions": {
+                "rsi_buy_range": [25, 70],
+                "rsi_sell_range": [30, 75],
+                "price_momentum_threshold": 0.0001,
+                "volume_multiplier": 0.8,
+                "macd_histogram_threshold": 0.5
+            },
+            "description": "Simplified Golden Formula with 4 robust conditions per signal"
+        }

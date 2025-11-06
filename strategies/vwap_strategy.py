@@ -284,3 +284,27 @@ class VWAPStrategy:
     def get_recommended_timeframe(self) -> str:
         """Return recommended timeframe for this strategy"""
         return "M15"  # 15-minute timeframe as per original VWAP strategy
+    
+    def get_strategy_config(self) -> dict:
+        """Return strategy configuration parameters"""
+        return {
+            "strategy_name": "VWAP",
+            "symbol": self.symbol,
+            "timeframe": "M15",
+            "parameters": {
+                "atr_period": self.atr_period,
+                "rsi_period": self.rsi_period,
+                "ema_fast": self.ema_fast,
+                "ema_slow": self.ema_slow,
+                "rsi_oversold": self.rsi_oversold,
+                "breakout_candles": self.breakout_candles,
+                "signal_validity_candles": self.signal_validity_candles
+            },
+            "risk_management": {
+                "stop_loss_atr_mult": self.stop_loss_atr_mult,
+                "tp1_atr_mult": self.tp1_atr_mult,
+                "tp2_atr_mult": self.tp2_atr_mult,
+                "trailing_atr_mult": self.trailing_atr_mult,
+                "min_stop_usd": self.min_stop_usd
+            }
+        }

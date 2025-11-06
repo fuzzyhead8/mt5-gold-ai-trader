@@ -25,3 +25,21 @@ class SwingTradingStrategy:
         signals.insert(0, 'hold')
         data['signal'] = signals
         return data[['close', 'MACD', 'Signal_Line', 'signal']]
+    
+    def get_strategy_config(self) -> dict:
+        """Return strategy configuration parameters"""
+        return {
+            "strategy_name": "Swing Trading",
+            "symbol": self.symbol,
+            "timeframe": "H1",
+            "parameters": {
+                "ema_fast_period": 12,
+                "ema_slow_period": 26,
+                "macd_signal_period": 9
+            },
+            "signal_conditions": {
+                "macd_crossover": "MACD crosses above Signal Line for buy, below for sell",
+                "confirmation_required": False
+            },
+            "description": "Simple MACD crossover strategy for swing trading on hourly timeframe"
+        }
