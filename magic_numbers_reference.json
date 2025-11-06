@@ -1,0 +1,19 @@
+{
+  "magic_numbers": {
+    "100000": "TradeExecutor default parameter",
+    "101001": "GoldStorm strategy",
+    "102002": "VWAP strategy",
+    "999999": "Emergency position close"
+  },
+  "available_ranges": {
+    "103000_109999": "Available for new strategies",
+    "200000_299999": "Available for backtesting",
+    "300000_399999": "Available for testing"
+  },
+  "notes": [
+    "Each strategy must have unique magic number",
+    "Magic numbers help identify positions in MT5",
+    "Never reuse magic numbers between different strategies",
+    "Use 6-digit numbers for better organization"
+  ]
+}

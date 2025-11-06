@@ -56,9 +56,9 @@ def save_to_csv(df, symbol, tf_str, filename=None):
     """Save DataFrame to CSV file."""
     if filename is None:
         now = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{symbol}_{tf_str}_{now}.csv"
+        filename = f"backtests/{symbol}_{tf_str}_{now}.csv"
     if df is not None and not df.empty:
-        df.to_csv(filename)
+        df.to_csv(filename, index=False)
         print(f"Historical prices saved to {filename}")
     else:
         print("No data to save")

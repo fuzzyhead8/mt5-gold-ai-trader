@@ -22,7 +22,7 @@ class OrderManager:
             "position": ticket,
             "price": mt5.symbol_info_tick(self.symbol).ask if action_type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(self.symbol).bid,
             "deviation": 20,
-            "magic": 123456,
+            "magic": pos.magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,

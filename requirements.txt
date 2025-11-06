@@ -1,8 +1,10 @@
 MetaTrader5
 pandas
 numpy
-scikit-learn
+scikit-learn==1.5.2
 tensorflow
+tf-keras
+torch
 transformers
 beautifulsoup4
 requests
