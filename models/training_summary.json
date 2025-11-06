@@ -3,13 +3,15 @@
     "scalping",
     "day_trading",
     "golden",
+    "multi_rsi_ema",
     "swing"
   ],
-  "training_date": "2025-11-05T12:38:01.570332",
+  "training_date": "2025-11-06T22:06:17.490101",
   "model_files": {
     "scalping": "models/scalping_signal.joblib",
     "day_trading": "models/day_trading_signal.joblib",
     "golden": "models/golden_signal.joblib",
+    "multi_rsi_ema": "models/multi_rsi_ema_signal.joblib",
     "swing": "models/swing_signal.joblib"
   }
 }

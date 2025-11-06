@@ -1077,6 +1077,48 @@
       "duration_minutes": 0,
       "ticket": 5523847824,
       "status": "open"
+    },
+    {
+      "timestamp": "2025-11-06T18:25:20.007082",
+      "symbol": "XAUUSD",
+      "action": "sell",
+      "entry_price": 3969.94,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "goldstorm",
+      "sentiment": "bearish",
+      "duration_minutes": 0,
+      "ticket": 5524501544,
+      "status": "open"
+    },
+    {
+      "timestamp": "2025-11-06T18:40:20.934199",
+      "symbol": "XAUUSD",
+      "action": "sell",
+      "entry_price": 3976.03,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "goldstorm",
+      "sentiment": "bearish",
+      "duration_minutes": 0,
+      "ticket": 5524741068,
+      "status": "open"
+    },
+    {
+      "timestamp": "2025-11-06T22:10:31.749326",
+      "symbol": "XAUUSD",
+      "action": "sell",
+      "entry_price": 3980.31,
+      "exit_price": null,
+      "volume": 0.1,
+      "profit_usd": 0.0,
+      "strategy": "goldstorm",
+      "sentiment": "bearish",
+      "duration_minutes": 0,
+      "ticket": 5526710448,
+      "status": "open"
     }
   ]
 }

@@ -31,6 +31,7 @@ from strategies.swing import SwingTradingStrategy
 from strategies.golden_scalping_simplified import GoldenScalpingStrategySimplified
 from strategies.goldstorm_strategy import GoldStormStrategy
 from strategies.vwap_strategy import VWAPStrategy
+from strategies.multi_rsi_ema import MultiRSIEMAStrategy
 
 from dotenv import load_dotenv
 
@@ -64,6 +65,7 @@ class TradingBot:
             'golden': GoldenScalpingStrategySimplified(symbol),
             'goldstorm': GoldStormStrategy(symbol),
             'vwap': VWAPStrategy(symbol),
+            'multi_rsi_ema': MultiRSIEMAStrategy(symbol),
             'swing': SwingTradingStrategy(symbol)
         }
 
@@ -301,7 +303,7 @@ if __name__ == "__main__":
     parser.add_argument('bars', nargs='?', type=int, default=200, 
                        help='Number of historical bars (default: 200)')
     parser.add_argument('strategy', nargs='?', type=str, default='auto', 
-                       choices=['auto', 'scalping', 'swing', 'day_trading', 'golden', 'goldstorm', 'vwap'], 
+                       choices=['auto', 'scalping', 'swing', 'day_trading', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'], 
                        help='Trading strategy (default: auto)')
     
     args = parser.parse_args()

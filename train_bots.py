@@ -5,6 +5,7 @@ Trains all trading bots with their respective timeframe data:
 - Scalping: M1 data
 - Day Trading: M15 data  
 - Golden: M15 data
+- Multi RSI EMA: M15 data
 - Swing: H4 data
 """
 
@@ -29,6 +30,7 @@ from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.golden_scalping import GoldenScalpingStrategy
 from strategies.swing import SwingTradingStrategy
+from strategies.multi_rsi_ema import MultiRSIEMAStrategy
 
 class BotTrainer:
     def __init__(self):
@@ -109,6 +111,18 @@ class BotTrainer:
                     row.get('trend_short', 0),
                     row.get('trend_medium', 0),
                     row.get('price_momentum', 0),
+                ]
+                
+            elif strategy_name == 'multi_rsi_ema':
+                # Multi RSI EMA-specific features
+                feature_vector = [
+                    row.get('close', 0),
+                    row.get('rsi_2', 50),
+                    row.get('rsi_9', 50),
+                    row.get('rsi_34', 50),
+                    row.get('ema_34', row.get('close', 0)),
+                    row.get('ema_144', row.get('close', 0)),
+                    row.get('ema_21', row.get('close', 0)),
                 ]
                 
             elif strategy_name == 'swing':
@@ -257,16 +271,20 @@ class BotTrainer:
         # Define strategy configurations
         strategy_configs = {
             'scalping': {
-                'files': ['backtests/XAUUSD_M1_20251104_214729.csv'],
+                'files': ['backtests/XAUUSD_M1_20251106_012337.csv'],
                 'class': ScalpingStrategy
             },
             'day_trading': {
-                'files': ['backtests/XAUUSD_M15_20251104_214837.csv'],
+                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
                 'class': DayTradingStrategy
             },
             'golden': {
-                'files': ['backtests/XAUUSD_M15_20251104_214837.csv'],
+                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
                 'class': GoldenScalpingStrategy
+            },
+            'multi_rsi_ema': {
+                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
+                'class': MultiRSIEMAStrategy
             },
             'swing': {
                 'files': [

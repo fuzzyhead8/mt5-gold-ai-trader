@@ -3,19 +3,20 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pandas as pd
 from strategies.scalping import ScalpingStrategy
-from strategies.scalping_pyramiding import RobustTrendPyramidingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
 from strategies.golden_scalping import GoldenScalpingStrategy
 from strategies.golden_risk_manager import GoldenRiskManager
 from strategies.goldstorm_strategy import GoldStormStrategy
+from strategies.goldstorm_v2_strategy import GoldStormV2Strategy
 from strategies.vwap_strategy import VWAPStrategy
+from strategies.multi_rsi_ema import MultiRSIEMAStrategy
 import matplotlib.pyplot as plt
 import glob
 from datetime import datetime
 
 class BacktestRunner:
-    def __init__(self, strategy_param: str = 'all', symbol: str = 'XAUUSD', chart_style: str = 'light'):
+    def __init__(self, strategy_param: str = 'all', symbol: str = 'XAUUSD', chart_style: str = 'light', use_ml: bool = False):
         """
         Initialize BacktestRunner with strategy parameter
         
@@ -23,15 +24,17 @@ class BacktestRunner:
             strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden'
             symbol: Trading symbol (default: 'XAUUSD')
             chart_style: 'light' or 'dark' for TradingView-style themes
+            use_ml: Use trained ML model for signals (default: False)
         """
         self.symbol = symbol
         self.strategy_param = strategy_param.lower()
         self.chart_style = chart_style.lower()
+        self.use_ml = use_ml
         self.data = None
         self.timeframe = None
         
         # Validate strategy parameter
-        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'scalping_pyr', 'golden', 'goldstorm', 'vwap']
+        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'goldstormv2', 'vwap', 'multi_rsi_ema']
         if self.strategy_param not in valid_strategies:
             raise ValueError(f"Invalid strategy parameter. Must be one of: {valid_strategies}")
         
@@ -100,8 +103,6 @@ class BacktestRunner:
         """Get strategy instance based on type"""
         if strategy_type == 'scalping':
             return ScalpingStrategy(self.symbol)
-        elif strategy_type == 'scalping_pyr':
-            return RobustTrendPyramidingStrategy(self.symbol)
         elif strategy_type == 'daily':
             return DayTradingStrategy(self.symbol)
         elif strategy_type == 'swing':
@@ -110,8 +111,12 @@ class BacktestRunner:
             return GoldenScalpingStrategy(self.symbol)
         elif strategy_type == 'goldstorm':
             return GoldStormStrategy(self.symbol)
+        elif strategy_type == 'goldstormv2':
+            return GoldStormV2Strategy(self.symbol)
         elif strategy_type == 'vwap':
             return VWAPStrategy(self.symbol)
+        elif strategy_type == 'multi_rsi_ema':
+            return MultiRSIEMAStrategy(self.symbol)
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
 
@@ -121,12 +126,13 @@ class BacktestRunner:
             'daily': 'M30',
             'swing': 'H4',
             'scalping': 'M1',
-            'scalping_pyr': 'M1',
             'golden': 'M15',
             'goldstorm': 'M15',
-            'vwap': 'M15'
+            'goldstormv2': 'M15',
+            'vwap': 'M15',
+            'multi_rsi_ema': 'M15'
         }
-        return mapping.get(strategy.lower(), 'M15')
+        return mapping.get(strategy.lower(), 'M1')
 
     def _calculate_performance_metrics(self, results):
         """Calculate comprehensive TradingView-style performance metrics"""
@@ -272,89 +278,127 @@ class BacktestRunner:
         current_trade = None
         current_position = None
         entry_equity = initial_capital
+        current_equity = initial_capital
+        
+        # Use the position column if available (from fixed strategy_returns calc)
+        if 'position' in results.columns:
+            positions = results['position']
+        else:
+            # Fallback to signal-based position (for compatibility)
+            positions = []
+            position = 0
+            for signal in results['signal']:
+                if pd.isna(signal):
+                    positions.append(position)
+                    continue
+                signal_str = str(signal).lower()
+                if signal_str == 'buy' and position != 1:
+                    position = 1
+                elif signal_str == 'sell' and position != -1:
+                    position = -1
+                positions.append(position)
+            results['position'] = positions
         
         for i in range(len(results)):
             signal = results['signal'].iloc[i]
-            price = results['close'].iloc[i]
-            returns = results['strategy_returns'].iloc[i] if i > 0 else 0
+            returns = results['strategy_returns'].iloc[i]
+            position = results['position'].iloc[i]
             
-            # Update entry equity (equity at time of trade entry)
+            # Update current equity
+            current_equity *= (1 + returns)
+            
             if current_trade is None:
-                entry_equity = entry_equity * (1 + returns) if i > 0 else initial_capital
+                entry_equity = current_equity
             
-            # Improved trade detection logic
-            if signal == 'buy' and current_position != 'buy':
-                # Close any existing short position
-                if current_trade is not None and current_trade['type'] == 'short':
-                    self._close_trade(trades, current_trade, price, results.index[i], entry_equity)
+            if pd.isna(signal):
+                continue
+            
+            signal_str = str(signal).lower()
+            close_position = False
+            new_trade_type = None
+            
+            if signal_str == 'buy' and position == 1 and current_position != 1:
+                if current_position == -1:
+                    close_position = True
+                current_position = 1
+                new_trade_type = 'long'
+            elif signal_str == 'sell' and position == -1 and current_position != -1:
+                if current_position == 1:
+                    close_position = True
+                current_position = -1
+                new_trade_type = 'short'
+            else:
+                close_position = False
+            
+            if close_position and current_trade is not None:
+                # Close current trade using accumulated returns
+                trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i].sum()
+                pnl = trade_returns_sum * current_trade['entry_equity']
+                duration = i - current_trade['entry_index']
+                exit_price = results['close'].iloc[i]
                 
-                # Start new long position
+                trades.append({
+                    'type': current_trade['type'],
+                    'entry_price': current_trade['entry_price'],
+                    'exit_price': exit_price,
+                    'entry_time': current_trade['entry_time'],
+                    'exit_time': results.index[i],
+                    'pnl': pnl,
+                    'duration': duration,
+                    'entry_equity': current_trade['entry_equity']
+                })
+                current_trade = None
+            
+            if (signal_str in ['buy', 'sell']) and current_trade is None and new_trade_type:
+                # Start new trade
                 current_trade = {
-                    'type': 'long',
-                    'entry_price': price,
+                    'type': new_trade_type,
+                    'entry_price': results['close'].iloc[i],
                     'entry_time': results.index[i],
                     'entry_equity': entry_equity,
                     'entry_index': i
                 }
-                current_position = 'buy'
+            
+            # Handle explicit exit signals (for pyramiding)
+            if signal_str in ['exit_buy', 'exit_sell'] and current_trade is not None:
+                trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i+1].sum()
+                pnl = trade_returns_sum * current_trade['entry_equity']
+                duration = i - current_trade['entry_index'] + 1
+                exit_price = results['close'].iloc[i]
                 
-            elif signal == 'sell' and current_position != 'sell':
-                # Close any existing long position
-                if current_trade is not None and current_trade['type'] == 'long':
-                    self._close_trade(trades, current_trade, price, results.index[i], entry_equity)
-                
-                # Start new short position
-                current_trade = {
-                    'type': 'short',
-                    'entry_price': price,
-                    'entry_time': results.index[i],
-                    'entry_equity': entry_equity,
-                    'entry_index': i
-                }
-                current_position = 'sell'
-                
-            elif signal == 'hold' and current_trade is not None:
-                # Close current position when switching to hold
-                self._close_trade(trades, current_trade, price, results.index[i], entry_equity)
+                trades.append({
+                    'type': current_trade['type'],
+                    'entry_price': current_trade['entry_price'],
+                    'exit_price': exit_price,
+                    'entry_time': current_trade['entry_time'],
+                    'exit_time': results.index[i],
+                    'pnl': pnl,
+                    'duration': duration,
+                    'entry_equity': current_trade['entry_equity']
+                })
                 current_trade = None
-                current_position = None
-                
-            # Handle explicit exit signals (for pyramiding strategies)
-            elif signal in ['exit_buy', 'exit_sell'] and current_trade is not None:
-                self._close_trade(trades, current_trade, price, results.index[i], entry_equity)
-                current_trade = None
-                current_position = None
+                current_position = 0
         
-        # Handle unclosed trades at the end
+        # Handle unclosed trade at end
         if current_trade is not None:
-            self._close_trade(trades, current_trade, results['close'].iloc[-1], results.index[-1], entry_equity)
+            i_end = len(results)
+            trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i_end].sum()
+            pnl = trade_returns_sum * current_trade['entry_equity']
+            duration = i_end - current_trade['entry_index']
+            exit_price = results['close'].iloc[-1]
+            
+            trades.append({
+                'type': current_trade['type'],
+                'entry_price': current_trade['entry_price'],
+                'exit_price': exit_price,
+                'entry_time': current_trade['entry_time'],
+                'exit_time': results.index[-1],
+                'pnl': pnl,
+                'duration': duration,
+                'entry_equity': current_trade['entry_equity']
+            })
         
         return trades
-    
-    def _close_trade(self, trades, current_trade, exit_price, exit_time, entry_equity):
-        """Helper method to close a trade and calculate P&L"""
-        # Calculate P&L based on price movement and position type
-        if current_trade['type'] == 'long':
-            price_change = (exit_price - current_trade['entry_price']) / current_trade['entry_price']
-        else:  # short
-            price_change = (current_trade['entry_price'] - exit_price) / current_trade['entry_price']
-        
-        # Calculate dollar P&L (assuming 1 unit position size)
-        pnl = price_change * current_trade['entry_equity']
-        
-        # Calculate duration in bars
-        duration = len(trades) + 1  # Simple approximation for now
-        
-        trades.append({
-            'type': current_trade['type'],
-            'entry_price': current_trade['entry_price'],
-            'exit_price': exit_price,
-            'entry_time': current_trade['entry_time'],
-            'exit_time': exit_time,
-            'pnl': pnl,
-            'duration': duration,
-            'entry_equity': current_trade['entry_equity']
-        })
 
     def _run_single_strategy(self, strategy_type: str):
         """Run a single strategy and return results"""
@@ -366,14 +410,27 @@ class BacktestRunner:
         result = strategy.generate_signals(self.data.copy())
         
         # Calculate performance
-        result['returns'] = result['close'].pct_change()
+        result['returns'] = result['close'].pct_change().fillna(0)
         
-        # Handle pyramiding strategy differently
+        # Simulate persistent position for non-pyramiding strategies
         if strategy_type == 'scalping_pyr':
-            # Calculate returns with position sizing
             result['strategy_returns'] = self._calculate_pyramiding_returns(result)
         else:
-            result['strategy_returns'] = result['returns'] * result['signal'].map({'buy': 1, 'sell': -1, 'hold': 0}).fillna(0)
+            position = 0
+            positions = []
+            for signal in result['signal']:
+                if pd.isna(signal):
+                    positions.append(position)
+                    continue
+                signal_str = str(signal).lower()
+                if signal_str == 'buy' and position != 1:
+                    position = 1
+                elif signal_str == 'sell' and position != -1:
+                    position = -1
+                # else hold, keep position
+                positions.append(position)
+            result['position'] = positions
+            result['strategy_returns'] = result['position'] * result['returns']
         
         result['cumulative'] = (1 + result['strategy_returns']).cumprod()
         
@@ -701,7 +758,7 @@ class BacktestRunner:
             print(f"Running ALL strategies on {self.symbol} with respective timeframes")
             
             # Run all strategies
-            for strategy in ['scalping', 'scalping_pyr', 'daily', 'swing', 'golden', 'goldstorm', 'vwap']:
+            for strategy in ['scalping', 'daily', 'swing', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema']:
                 timeframe = self._get_timeframe(strategy)
                 self._load_data(timeframe)
                 print(f"Data period for {strategy}: {self.data.index[0]} to {self.data.index[-1]}")
@@ -737,7 +794,7 @@ class BacktestRunner:
         
         return results_dict
 
-def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light'):
+def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light', use_ml=False):
     """
     Convenience function to run backtest
     
@@ -745,22 +802,24 @@ def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light'):
         strategy_param: 'all', 'daily', 'swing', 'scalping'
         symbol: Trading symbol (default: 'XAUUSD')
         chart_style: 'light' or 'dark' for TradingView-style themes (default: 'light')
+        use_ml: Use trained ML model for signals (default: False)
     
     Returns:
         Dictionary with results for each strategy
     """
-    runner = BacktestRunner(strategy_param=strategy_param, symbol=symbol, chart_style=chart_style)
+    runner = BacktestRunner(strategy_param=strategy_param, symbol=symbol, chart_style=chart_style, use_ml=use_ml)
     return runner.run()
 
 if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='Run MT5 Gold AI Trader Backtest with TradingView-Style Charts')
-    parser.add_argument('--strategy', '-s', choices=['all', 'daily', 'swing', 'scalping', 'scalping_pyr', 'golden', 'goldstorm', 'vwap'], 
+    parser.add_argument('--strategy', '-s', choices=['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'goldstormv2', 'vwap', 'multi_rsi_ema'], 
                        default='all', help='Strategy to run (default: all)')
     parser.add_argument('--symbol', default='XAUUSD', help='Trading symbol (default: XAUUSD)')
     parser.add_argument('--style', choices=['light', 'dark'], default='light', 
                        help='Chart style theme: light (default) or dark (TradingView-style)')
+    parser.add_argument('--use_ml', action='store_true', help='Use trained ML model for signals (default: False)')
     
     args = parser.parse_args()
     
@@ -769,9 +828,10 @@ if __name__ == '__main__':
     print(f"Strategy: {args.strategy.upper()}")
     print(f"Symbol: {args.symbol}")
     print(f"Chart Style: {style_emoji} {args.style.upper()} theme")
+    print(f"Use ML: {args.use_ml}")
     
     try:
-        results = run_backtest(strategy_param=args.strategy, symbol=args.symbol, chart_style=args.style)
+        results = run_backtest(strategy_param=args.strategy, symbol=args.symbol, chart_style=args.style, use_ml=args.use_ml)
         print(f"\nBacktest completed successfully!")
         
     except Exception as e:
