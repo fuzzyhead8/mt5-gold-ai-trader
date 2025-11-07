@@ -31,7 +31,7 @@ class RealisticBacktestRunner:
         self.execution_delay_bars = 1  # Signal acts on next bar (realistic)
         
         # Account settings
-        self.initial_balance = 10000
+        self.initial_balance = 1000
         self.max_risk_per_trade = 2.0  # 2% risk per trade
         
         # Load data

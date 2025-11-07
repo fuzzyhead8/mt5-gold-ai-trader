@@ -150,6 +150,91 @@ class GoldenScalpingStrategySimplified(BaseStrategy):
         
         return data[return_cols]
     
+    def execute_strategy(self, df: pd.DataFrame, sentiment: str, balance: float) -> dict:
+        """
+        Execute the Golden Scalping Simplified strategy: generate signals and place trades if conditions met.
+        
+        Args:
+            df: Market data DataFrame
+            sentiment: Current market sentiment ('bullish', 'bearish', 'neutral')
+            balance: Current account balance
+            
+        Returns:
+            dict: Execution result with status and details
+        """
+        # Generate signals
+        signals_df = self.generate_signals(df)
+        if len(signals_df) == 0:
+            self.logger.info("No data available for signal generation")
+            return {"status": "no_data", "signal": "hold"}
+        
+        latest_signal = signals_df['signal'].iloc[-1]
+        if latest_signal not in ['buy', 'sell']:
+            self.logger.info(f"No actionable signal generated: {latest_signal}")
+            return {"status": "no_signal", "signal": latest_signal}
+        
+        # Validate signal with sentiment
+        if not self.validate_signal_with_sentiment(latest_signal, sentiment):
+            self.logger.info(f"Signal '{latest_signal}' rejected due to sentiment '{sentiment}'")
+            return {"status": "sentiment_rejected", "signal": latest_signal}
+        
+        # Get current market price
+        current_price = self.get_market_price(latest_signal)
+        if current_price is None:
+            self.logger.error("Failed to get current market price")
+            return {"status": "no_price", "signal": latest_signal}
+        
+        # Get symbol info for point and digits
+        symbol_info = mt5.symbol_info(self.symbol)
+        if not symbol_info:
+            self.logger.error(f"Failed to get symbol info for {self.symbol}")
+            return {"status": "no_symbol_info", "signal": latest_signal}
+        
+        point = symbol_info.point
+        digits = symbol_info.digits
+        
+        # Define SL and TP distances (50 pips SL, 100 pips TP for 1:2 RR)
+        # For XAUUSD, 1 pip = 0.1, point = 0.01, so 50 pips = 5.0 price units
+        sl_distance = 5.0  # 50 pips
+        tp_distance = 10.0  # 100 pips
+        
+        # Calculate SL and TP levels
+        if latest_signal == 'buy':
+            stop_loss = round(current_price - sl_distance, digits)
+            take_profit = round(current_price + tp_distance, digits)
+        else:  # sell
+            stop_loss = round(current_price + sl_distance, digits)
+            take_profit = round(current_price - tp_distance, digits)
+        
+        # Calculate position size based on risk (2% of balance)
+        lot_size = self.calculate_position_size(balance, current_price, stop_loss, risk_percent=2.0)
+        
+        # Validate stop distances
+        if not self.validate_stop_distances(current_price, stop_loss, take_profit):
+            self.logger.warning("Stop loss/take profit distances invalid")
+            return {"status": "invalid_stops", "signal": latest_signal}
+        
+        # Execute the trade
+        result = self.execute_trade(
+            latest_signal, sentiment, current_price, 
+            stop_loss, take_profit, lot_size, "GoldenScalpingSimplified"
+        )
+        
+        if result:
+            self.logger.info(f"Trade executed successfully: {latest_signal} at {current_price}, lot: {lot_size}")
+            return {
+                "status": "executed", 
+                "signal": latest_signal, 
+                "ticket": result.order,
+                "price": current_price,
+                "sl": stop_loss,
+                "tp": take_profit,
+                "lot_size": lot_size
+            }
+        else:
+            self.logger.error(f"Failed to execute {latest_signal} trade")
+            return {"status": "execution_failed", "signal": latest_signal}
+
     def get_strategy_config(self) -> dict:
         """Return strategy configuration parameters"""
         return {

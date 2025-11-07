@@ -75,6 +75,12 @@ class TradingBot:
             logging.error("MT5 initialization failed")
             return False
         
+        # Select the trading symbol
+        if not mt5.symbol_select(self.symbol, True):
+            logging.error(f"Failed to select symbol {self.symbol}")
+            mt5.shutdown()
+            return False
+        
         self.acc_info = self.account_handler.get_account_info()
         if not self.acc_info:
             logging.error("Account info retrieval failed")
@@ -182,27 +188,41 @@ class TradingBot:
         retry_count = 0
         max_retries = 3
         
+        # Check if symbol is available
+        symbol_info = mt5.symbol_info(self.symbol)
+        if symbol_info is None:
+            raise Exception(f"Symbol {self.symbol} not found or not selected")
+        
+        if not symbol_info.visible:
+            if not mt5.symbol_select(self.symbol, True):
+                raise Exception(f"Failed to select symbol {self.symbol}")
+        
         while retry_count < max_retries and data is None:
             try:
                 data = mt5.copy_rates_from_pos(self.symbol, timeframe, 0, bars)
                 if data is None:
+                    error = mt5.last_error()
+                    logging.error(f"MT5 data fetch failed (attempt {retry_count + 1}/{max_retries}): Error {error[0]} - {error[1]}")
                     retry_count += 1
                     if retry_count < max_retries:
                         time.sleep(2 ** retry_count)
-                break
+                else:
+                    break
             except Exception as e:
+                logging.error(f"Unexpected error in MT5 data fetch (attempt {retry_count + 1}/{max_retries}): {e}")
                 retry_count += 1
-                logging.error(f"MT5 data fetch error (attempt {retry_count}/{max_retries}): {e}")
                 if retry_count < max_retries:
                     time.sleep(2 ** retry_count)
         
         if data is None:
-            raise Exception(f"Failed to fetch market data after {max_retries} attempts")
+            error = mt5.last_error()
+            raise Exception(f"Failed to fetch market data after {max_retries} attempts. Last error: {error[0]} - {error[1]}")
         
         df = pd.DataFrame(data)
         df['time'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('time', inplace=True)
         
+        logging.info(f"Successfully fetched {len(df)} bars of {self.symbol} on timeframe {timeframe}")
         return df
 
     def trading_iteration(self):
@@ -321,6 +341,14 @@ class TradingBot:
 
 
 if __name__ == "__main__":
+    import sys
+    
+    test_mode = False
+    if len(sys.argv) > 1 and sys.argv[1] == 'test_consistency':
+        test_mode = True
+        # For test mode, use default symbol and strategy
+        sys.argv = [sys.argv[0]]  # Remove the test_consistency arg so parser doesn't see it
+    
     parser = argparse.ArgumentParser(description='Clean MT5 Gold AI Trader')
     parser.add_argument('symbol', nargs='?', type=str, default='XAUUSD', 
                        help='Trading symbol (default: XAUUSD)')
@@ -337,4 +365,30 @@ if __name__ == "__main__":
         bars=args.bars, 
         manual_strategy=args.strategy if args.strategy != 'auto' else None
     )
-    bot.run()
+    
+    if test_mode:
+        # Run single iteration for testing
+        def signal_handler(sig, frame):
+            logging.info("SIGINT received, setting stop event")
+            bot.stop_event.set()
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
+
+        # Initialize MT5
+        if not bot.initialize_mt5():
+            sys.exit(1)
+
+        # Load classifier
+        bot.load_classifier()
+
+        # Run single trading iteration
+        try:
+            bot.trading_iteration()
+            logging.info("Test consistency iteration completed successfully")
+        except Exception as e:
+            logging.error(f"Test iteration failed: {e}")
+        finally:
+            bot.shutdown_mt5()
+    else:
+        bot.run()

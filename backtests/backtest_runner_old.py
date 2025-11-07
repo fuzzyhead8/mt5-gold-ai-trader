@@ -2,37 +2,39 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pandas as pd
-import numpy as np
 from strategies.scalping import ScalpingStrategy
 from strategies.day_trading import DayTradingStrategy
 from strategies.swing import SwingTradingStrategy
-from strategies.golden_scalping_simplified import GoldenScalpingStrategySimplified
+from strategies.golden_scalping import GoldenScalpingStrategy
+from strategies.golden_risk_manager import GoldenRiskManager
 from strategies.goldstorm_strategy import GoldStormStrategy
+from strategies.goldstorm_v2_strategy import GoldStormV2Strategy
 from strategies.vwap_strategy import VWAPStrategy
 from strategies.multi_rsi_ema import MultiRSIEMAStrategy
 import matplotlib.pyplot as plt
 import glob
 from datetime import datetime
-import time
 
 class BacktestRunner:
-    def __init__(self, strategy_param: str = 'all', symbol: str = 'XAUUSD', chart_style: str = 'light'):
+    def __init__(self, strategy_param: str = 'all', symbol: str = 'XAUUSD', chart_style: str = 'light', use_ml: bool = False):
         """
         Initialize BacktestRunner with strategy parameter
         
         Args:
-            strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'
+            strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden'
             symbol: Trading symbol (default: 'XAUUSD')
             chart_style: 'light' or 'dark' for TradingView-style themes
+            use_ml: Use trained ML model for signals (default: False)
         """
         self.symbol = symbol
         self.strategy_param = strategy_param.lower()
         self.chart_style = chart_style.lower()
+        self.use_ml = use_ml
         self.data = None
         self.timeframe = None
         
         # Validate strategy parameter
-        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema']
+        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'goldstormv2', 'vwap', 'multi_rsi_ema']
         if self.strategy_param not in valid_strategies:
             raise ValueError(f"Invalid strategy parameter. Must be one of: {valid_strategies}")
         
@@ -93,7 +95,7 @@ class BacktestRunner:
             self.data['time'] = pd.to_datetime(self.data['time'])
             self.data.set_index('time', inplace=True)
             self.timeframe = timeframe
-            print(f"✅ Loaded {len(self.data)} {timeframe} candles from {self.data.index[0]} to {self.data.index[-1]}")
+            print(f"Loaded {len(self.data)} {timeframe} candles from {self.data.index[0]} to {self.data.index[-1]} from {latest_file}")
         except FileNotFoundError as e:
             raise FileNotFoundError(str(e))
 
@@ -106,9 +108,11 @@ class BacktestRunner:
         elif strategy_type == 'swing':
             return SwingTradingStrategy(self.symbol)
         elif strategy_type == 'golden':
-            return GoldenScalpingStrategySimplified(self.symbol)
+            return GoldenScalpingStrategy(self.symbol)
         elif strategy_type == 'goldstorm':
             return GoldStormStrategy(self.symbol)
+        elif strategy_type == 'goldstormv2':
+            return GoldStormV2Strategy(self.symbol)
         elif strategy_type == 'vwap':
             return VWAPStrategy(self.symbol)
         elif strategy_type == 'multi_rsi_ema':
@@ -124,6 +128,7 @@ class BacktestRunner:
             'scalping': 'M1',
             'golden': 'M15',
             'goldstorm': 'M15',
+            'goldstormv2': 'M15',
             'vwap': 'M15',
             'multi_rsi_ema': 'M15'
         }
@@ -131,7 +136,7 @@ class BacktestRunner:
 
     def _calculate_performance_metrics(self, results):
         """Calculate comprehensive TradingView-style performance metrics"""
-        initial_capital = 1000  # Assume $1K starting capital
+        initial_capital = 10000  # Assume $10K starting capital
         
         # Calculate individual trade results
         trade_results = self._extract_individual_trades(results, initial_capital)
@@ -218,7 +223,7 @@ class BacktestRunner:
         short_gross_loss = abs(sum([t['pnl'] for t in short_trades if t['pnl'] < 0]))
         
         return {
-            # Overview metrics
+            # Overview metrics (like TradingView Overview tab)
             'Initial Capital': f"${initial_capital:.2f}",
             'Net Profit': f"${net_profit:.2f} ({total_return_pct:+.2f}%)",
             'Gross Profit': f"${gross_profit:.2f} ({gross_profit/initial_capital*100:.2f}%)",
@@ -231,7 +236,7 @@ class BacktestRunner:
             'Max Equity Drawdown': f"${abs(max_drawdown_dollar):.2f} ({abs(max_drawdown_pct):.2f}%)",
             'Buy & Hold Return': f"{buy_hold_return:+.2f}%",
             
-            # Trade analysis
+            # Trade analysis (like TradingView Trades Analysis tab)
             'Total Trades': total_trades,
             'Winning Trades': winning_trades,
             'Losing Trades': losing_trades,
@@ -262,7 +267,7 @@ class BacktestRunner:
             'Short Gross Profit': f"${short_gross_profit:.2f} ({short_gross_profit/initial_capital*100:.2f}%)",
             'Short Gross Loss': f"${short_gross_loss:.2f} ({short_gross_loss/initial_capital*100:.2f}%)",
             
-            # Additional metrics
+            # Additional metrics for compatibility
             'Sharpe Ratio': f"{sharpe_ratio:.3f}",
             'Final Equity': f"${final_equity:.2f}",
         }
@@ -275,24 +280,37 @@ class BacktestRunner:
         entry_equity = initial_capital
         current_equity = initial_capital
         
-        # Use the position column
-        positions = results['position'].values
-        signals = results['signal'].values
-        returns = results['strategy_returns'].values
-        closes = results['close'].values
+        # Use the position column if available (from fixed strategy_returns calc)
+        if 'position' in results.columns:
+            positions = results['position']
+        else:
+            # Fallback to signal-based position (for compatibility)
+            positions = []
+            position = 0
+            for signal in results['signal']:
+                if pd.isna(signal):
+                    positions.append(position)
+                    continue
+                signal_str = str(signal).lower()
+                if signal_str == 'buy' and position != 1:
+                    position = 1
+                elif signal_str == 'sell' and position != -1:
+                    position = -1
+                positions.append(position)
+            results['position'] = positions
         
         for i in range(len(results)):
-            signal = signals[i]
-            ret = returns[i]
-            position = positions[i]
+            signal = results['signal'].iloc[i]
+            returns = results['strategy_returns'].iloc[i]
+            position = results['position'].iloc[i]
             
             # Update current equity
-            current_equity *= (1 + ret)
+            current_equity *= (1 + returns)
             
             if current_trade is None:
                 entry_equity = current_equity
             
-            if pd.isna(signal) or signal == 'hold':
+            if pd.isna(signal):
                 continue
             
             signal_str = str(signal).lower()
@@ -309,17 +327,20 @@ class BacktestRunner:
                     close_position = True
                 current_position = -1
                 new_trade_type = 'short'
+            else:
+                close_position = False
             
             if close_position and current_trade is not None:
-                # Close current trade
-                trade_returns_sum = np.sum(returns[current_trade['entry_index']:i])
+                # Close current trade using accumulated returns
+                trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i].sum()
                 pnl = trade_returns_sum * current_trade['entry_equity']
                 duration = i - current_trade['entry_index']
+                exit_price = results['close'].iloc[i]
                 
                 trades.append({
                     'type': current_trade['type'],
                     'entry_price': current_trade['entry_price'],
-                    'exit_price': closes[i],
+                    'exit_price': exit_price,
                     'entry_time': current_trade['entry_time'],
                     'exit_time': results.index[i],
                     'pnl': pnl,
@@ -328,27 +349,48 @@ class BacktestRunner:
                 })
                 current_trade = None
             
-            if signal_str in ['buy', 'sell'] and current_trade is None and new_trade_type:
+            if (signal_str in ['buy', 'sell']) and current_trade is None and new_trade_type:
                 # Start new trade
                 current_trade = {
                     'type': new_trade_type,
-                    'entry_price': closes[i],
+                    'entry_price': results['close'].iloc[i],
                     'entry_time': results.index[i],
                     'entry_equity': entry_equity,
                     'entry_index': i
                 }
+            
+            # Handle explicit exit signals (for pyramiding)
+            if signal_str in ['exit_buy', 'exit_sell'] and current_trade is not None:
+                trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i+1].sum()
+                pnl = trade_returns_sum * current_trade['entry_equity']
+                duration = i - current_trade['entry_index'] + 1
+                exit_price = results['close'].iloc[i]
+                
+                trades.append({
+                    'type': current_trade['type'],
+                    'entry_price': current_trade['entry_price'],
+                    'exit_price': exit_price,
+                    'entry_time': current_trade['entry_time'],
+                    'exit_time': results.index[i],
+                    'pnl': pnl,
+                    'duration': duration,
+                    'entry_equity': current_trade['entry_equity']
+                })
+                current_trade = None
+                current_position = 0
         
         # Handle unclosed trade at end
         if current_trade is not None:
             i_end = len(results)
-            trade_returns_sum = np.sum(returns[current_trade['entry_index']:i_end])
+            trade_returns_sum = results['strategy_returns'].iloc[current_trade['entry_index']:i_end].sum()
             pnl = trade_returns_sum * current_trade['entry_equity']
             duration = i_end - current_trade['entry_index']
+            exit_price = results['close'].iloc[-1]
             
             trades.append({
                 'type': current_trade['type'],
                 'entry_price': current_trade['entry_price'],
-                'exit_price': closes[-1],
+                'exit_price': exit_price,
                 'entry_time': current_trade['entry_time'],
                 'exit_time': results.index[-1],
                 'pnl': pnl,
@@ -359,92 +401,72 @@ class BacktestRunner:
         return trades
 
     def _run_single_strategy(self, strategy_type: str):
-        """Run a single strategy and return results - FAST VECTORIZED VERSION"""
+        """Run a single strategy and return results - FIXED for no look-ahead bias"""
         print(f"\n{'='*70}")
-        print(f"🚀 {strategy_type.upper()} STRATEGY BACKTEST")
+        print(f"🚀 {strategy_type.upper()} STRATEGY BACKTEST RESULTS (No Look-Ahead Bias)")
         print(f"{'='*70}")
-        
-        start_time = time.time()
         
         strategy = self._get_strategy(strategy_type)
         
-        # Call strategy's generate_signals() method ONCE with all data
-        import inspect
-        sig = inspect.signature(strategy.generate_signals)
+        # FIXED: Generate signals progressively without look-ahead bias
+        result = self.data.copy()
+        signals = []
+        min_lookback = max(50, 200)  # Conservative minimum for indicators (adjust based on strategy)
         
-        if 'sentiment' in sig.parameters:
-            # Strategy uses sentiment - pass neutral for backtest
-            result = strategy.generate_signals(self.data.copy(), sentiment='neutral')
-            logging.info(f"⚠️  {strategy_type} uses sentiment - using 'neutral' in backtest")
-        else:
-            result = strategy.generate_signals(self.data.copy())
+        for i in range(len(result)):
+            if i < min_lookback:
+                signals.append('hold')
+            else:
+                # Use only past and current data up to i
+                current_data = result.iloc[:i+1].copy()
+                temp_result = strategy.generate_signals(current_data)
+                # Take the latest signal
+                latest_signal = temp_result['signal'].iloc[-1] if 'signal' in temp_result.columns else 'hold'
+                signals.append(latest_signal)
         
-        # Ensure 'signal' column exists
-        if 'signal' not in result.columns:
-            raise ValueError(f"{strategy_type} strategy did not return 'signal' column")
+        result['signal'] = signals
         
-        # Calculate returns (vectorized)
+        # Calculate performance
         result['returns'] = result['close'].pct_change().fillna(0)
         
-        # Convert signals to positions (IMPROVED with normalization)
-        position = 0
-        positions = []
-        
-        for signal in result['signal']:
-            if pd.isna(signal):
+        # Simulate persistent position for non-pyramiding strategies
+        if strategy_type == 'scalping_pyr':
+            result['strategy_returns'] = self._calculate_pyramiding_returns(result)
+        else:
+            position = 0
+            positions = []
+            for signal in result['signal']:
+                if pd.isna(signal):
+                    positions.append(position)
+                    continue
+                signal_str = str(signal).lower()
+                if signal_str == 'buy' and position != 1:
+                    position = 1
+                elif signal_str == 'sell' and position != -1:
+                    position = -1
+                # else hold, keep position
                 positions.append(position)
-                continue
-            
-            # Normalize different signal formats
-            if isinstance(signal, str):
-                signal_str = signal.lower()
-            elif isinstance(signal, (int, float)):
-                # Handle numeric signals: 1=buy, -1=sell, 0=hold
-                if signal > 0:
-                    signal_str = 'buy'
-                elif signal < 0:
-                    signal_str = 'sell'
-                else:
-                    signal_str = 'hold'
-            else:
-                signal_str = 'hold'
-            
-            # Update position based on signal
-            if signal_str == 'buy':
-                position = 1
-            elif signal_str == 'sell':
-                position = -1
-            # 'hold' or unknown → keep current position
-            
-            positions.append(position)
+            result['position'] = positions
+            result['strategy_returns'] = result['position'] * result['returns']
         
-        result['position'] = positions
-        
-        # Calculate strategy returns (vectorized)
-        result['strategy_returns'] = result['position'].shift(1).fillna(0) * result['returns']
-        
-        # Calculate cumulative returns (vectorized)
         result['cumulative'] = (1 + result['strategy_returns']).cumprod()
-        
-        elapsed = time.time() - start_time
         
         # Calculate and display metrics
         metrics = self._calculate_performance_metrics(result)
         self._display_tradingview_style_metrics(metrics, strategy_type)
         
         # Save results to CSV
-        output_path = os.path.join(os.path.dirname(__file__), f"{strategy_type}_backtest.csv")
+        output_path = os.path.join(os.path.dirname(__file__), f"{strategy_type}_backtest_no_bias.csv")
         result.to_csv(output_path)
-        
-        print(f"\n⚡ Backtest completed in {elapsed:.2f} seconds")
-        print(f"💾 Results saved to: {output_path}")
+        print(f"\n💾 Results saved to: {output_path} (No Look-Ahead Bias)")
         
         return result, metrics
+
 
     def _display_tradingview_style_metrics(self, metrics, strategy_type):
         """Display metrics in TradingView style with organized sections"""
         
-        # Overview Section
+        # Overview Section (Performance Tab)
         print(f"\n📊 PERFORMANCE OVERVIEW")
         print(f"{'─'*50}")
         print(f"{'Metric':<25} {'All':<20} {'Long':<15} {'Short':<15}")
@@ -490,7 +512,7 @@ class BacktestRunner:
         
         print(f"\n{'Avg # Bars in Trades':<25} {metrics['Avg # Bars in Trades']:<15}")
         
-        # Summary
+        # Summary with color coding (simulate with symbols)
         print(f"\n🎯 STRATEGY SUMMARY")
         print(f"{'─'*50}")
         status_symbol = "✅" if net_profit_num > 0 else "❌"
@@ -499,10 +521,88 @@ class BacktestRunner:
         print(f"{status_symbol} Strategy Status: {profit_color}")
         print(f"📊 Final Equity: {metrics['Final Equity']}")
         print(f"📈 Sharpe Ratio: {metrics['Sharpe Ratio']}")
+    
+    def _calculate_pyramiding_returns(self, result):
+        """
+        Calculate returns for pyramiding strategy
+        Takes into account position sizing and pyramid additions
+        """
+        strategy_returns = []
+        current_position = None
+        total_position_size = 0
+        entry_prices = []  # Track entry price for each pyramid level
+        
+        for i in range(len(result)):
+            signal = result['signal'].iloc[i]
+            close = result['close'].iloc[i]
+            returns = result['returns'].iloc[i]
+            
+            # Handle position entries and exits
+            if signal == 'buy':
+                current_position = 'buy'
+                total_position_size = 1.0
+                entry_prices = [close]
+                strategy_returns.append(0)  # No return on entry
+                
+            elif signal == 'sell':
+                current_position = 'sell'
+                total_position_size = 1.0
+                entry_prices = [close]
+                strategy_returns.append(0)  # No return on entry
+                
+            elif signal == 'add_buy' and current_position == 'buy':
+                # Add to position
+                add_size = result['position_size'].iloc[i]
+                total_position_size += add_size
+                entry_prices.append(close)
+                # Calculate return on existing position
+                strategy_returns.append(returns * (total_position_size - add_size))
+                
+            elif signal == 'add_sell' and current_position == 'sell':
+                # Add to position
+                add_size = result['position_size'].iloc[i]
+                total_position_size += add_size
+                entry_prices.append(close)
+                # Calculate return on existing position (inverted for sell)
+                strategy_returns.append(-returns * (total_position_size - add_size))
+                
+            elif signal == 'exit_buy':
+                # Close buy position
+                if current_position == 'buy':
+                    strategy_returns.append(returns * total_position_size)
+                else:
+                    strategy_returns.append(0)
+                current_position = None
+                total_position_size = 0
+                entry_prices = []
+                
+            elif signal == 'exit_sell':
+                # Close sell position
+                if current_position == 'sell':
+                    strategy_returns.append(-returns * total_position_size)
+                else:
+                    strategy_returns.append(0)
+                current_position = None
+                total_position_size = 0
+                entry_prices = []
+                
+            elif signal == 'hold':
+                # Calculate return based on current position
+                if current_position == 'buy':
+                    strategy_returns.append(returns * total_position_size)
+                elif current_position == 'sell':
+                    strategy_returns.append(-returns * total_position_size)
+                else:
+                    strategy_returns.append(0)
+            else:
+                strategy_returns.append(0)
+        
+        return pd.Series(strategy_returns, index=result.index)
 
     def _extract_return_percentage(self, net_profit_str):
         """Extract return percentage from Net Profit string format"""
         try:
+            # Extract percentage from string like "$1245.67 (+12.46%)"
             return float(net_profit_str.split('(')[1].replace('%)', '').replace('+', ''))
         except (IndexError, ValueError):
             return 0.0
@@ -510,6 +610,7 @@ class BacktestRunner:
     def _extract_numeric_value(self, formatted_str):
         """Extract numeric value from formatted string"""
         try:
+            # Extract number from strings like "1.987" or "$1245.67"
             import re
             number_match = re.search(r'[-+]?\d*\.?\d+', formatted_str.replace('$', '').replace(',', ''))
             return float(number_match.group()) if number_match else 0.0
@@ -518,13 +619,15 @@ class BacktestRunner:
 
     def _plot_results(self, results_dict):
         """Plot results for single or multiple strategies with TradingView-style themes"""
-        plt.style.use('default')
+        # Set up matplotlib style based on chart theme
+        plt.style.use('default')  # Reset to prevent style conflicts
         
         if len(results_dict) == 1:
-            # Single strategy plot
+            # Single strategy plot with TradingView styling
             strategy_name, (result, metrics) = list(results_dict.items())[0]
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
             
+            # Apply TradingView theme
             fig.patch.set_facecolor(self.colors['background'])
             
             # Price and signals chart
@@ -542,6 +645,7 @@ class BacktestRunner:
                        color=self.colors['sell_signal'], marker='v', s=60, 
                        label='Sell', alpha=0.9, edgecolors='white', linewidth=0.5)
             
+            # TradingView-style title and labels
             ax1.set_title(f'{strategy_name.upper()} Strategy - Price Action & Signals', 
                          color=self.colors['text'], fontsize=14, fontweight='bold', pad=15)
             ax1.set_ylabel('Price (USD)', color=self.colors['text'], fontsize=11)
@@ -557,7 +661,7 @@ class BacktestRunner:
             for text in legend1.get_texts():
                 text.set_color(self.colors['text'])
             
-            # Equity curve
+            # Equity curve chart
             ax2.set_facecolor(self.colors['background'])
             return_pct = self._extract_return_percentage(metrics['Net Profit'])
             equity_color = self.colors['profit_green'] if return_pct > 0 else self.colors['loss_red']
@@ -566,6 +670,7 @@ class BacktestRunner:
                     color=equity_color, linewidth=3, alpha=0.9,
                     label=f'{strategy_name.upper()} Equity ({return_pct:+.2f}%)')
             
+            # Fill area under equity curve
             ax2.fill_between(result.index, 1, result['cumulative'], 
                            color=equity_color, alpha=0.1)
             
@@ -586,13 +691,15 @@ class BacktestRunner:
                 text.set_color(self.colors['text'])
             
         else:
-            # Multiple strategies comparison
+            # Multiple strategies comparison with TradingView styling
             fig = plt.figure(figsize=(18, 12))
             fig.patch.set_facecolor(self.colors['background'])
             
+            # Equity curves comparison
             ax1 = plt.subplot(2, 1, 1)
             ax1.set_facecolor(self.colors['background'])
             
+            # TradingView-inspired color palette for multiple lines
             tv_colors = ['#2962FF', '#089981', '#F23645', '#FF9800', '#9C27B0', '#795548', '#E91E63']
             
             for i, (strategy_name, (result, metrics)) in enumerate(results_dict.items()):
@@ -618,7 +725,7 @@ class BacktestRunner:
             for text in legend1.get_texts():
                 text.set_color(self.colors['text'])
             
-            # Performance bar chart
+            # Performance metrics bar chart
             ax2 = plt.subplot(2, 1, 2)
             ax2.set_facecolor(self.colors['background'])
             
@@ -629,6 +736,7 @@ class BacktestRunner:
             x = range(len(strategies))
             width = 0.35
             
+            # Color bars based on performance
             return_colors = [self.colors['profit_green'] if r > 0 else self.colors['loss_red'] for r in returns]
             sharpe_colors = [self.colors['equity_line'] for _ in sharpe_ratios]
             
@@ -663,15 +771,15 @@ class BacktestRunner:
     def run(self):
         """Run backtest based on strategy parameter"""
         results_dict = {}
-        total_start = time.time()
         
         if self.strategy_param == 'all':
-            print(f"Running ALL strategies on {self.symbol} with respective timeframes\n")
+            print(f"Running ALL strategies on {self.symbol} with respective timeframes")
             
             # Run all strategies
             for strategy in ['scalping', 'daily', 'swing', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema']:
                 timeframe = self._get_timeframe(strategy)
                 self._load_data(timeframe)
+                print(f"Data period for {strategy}: {self.data.index[0]} to {self.data.index[-1]}")
                 result, metrics = self._run_single_strategy(strategy)
                 results_dict[strategy] = (result, metrics)
             
@@ -695,58 +803,54 @@ class BacktestRunner:
             # Run single strategy
             timeframe = self._get_timeframe(self.strategy_param)
             self._load_data(timeframe)
+            print(f"Data period: {self.data.index[0]} to {self.data.index[-1]}")
             result, metrics = self._run_single_strategy(self.strategy_param)
             results_dict[self.strategy_param] = (result, metrics)
-        
-        total_time = time.time() - total_start
-        print(f"\n⚡ Total backtest time: {total_time:.2f} seconds")
         
         # Plot results
         self._plot_results(results_dict)
         
         return results_dict
 
-
-def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light'):
+def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light', use_ml=False):
     """
     Convenience function to run backtest
     
     Args:
-        strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'
+        strategy_param: 'all', 'daily', 'swing', 'scalping'
         symbol: Trading symbol (default: 'XAUUSD')
         chart_style: 'light' or 'dark' for TradingView-style themes (default: 'light')
+        use_ml: Use trained ML model for signals (default: False)
     
     Returns:
         Dictionary with results for each strategy
     """
-    runner = BacktestRunner(strategy_param=strategy_param, symbol=symbol, chart_style=chart_style)
+    runner = BacktestRunner(strategy_param=strategy_param, symbol=symbol, chart_style=chart_style, use_ml=use_ml)
     return runner.run()
-
 
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Fast MT5 Gold AI Trader Backtest Runner')
-    parser.add_argument('--strategy', '-s', 
-                       choices=['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'], 
+    parser = argparse.ArgumentParser(description='Run MT5 Gold AI Trader Backtest with TradingView-Style Charts')
+    parser.add_argument('--strategy', '-s', choices=['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'goldstormv2', 'vwap', 'multi_rsi_ema'], 
                        default='all', help='Strategy to run (default: all)')
     parser.add_argument('--symbol', default='XAUUSD', help='Trading symbol (default: XAUUSD)')
     parser.add_argument('--style', choices=['light', 'dark'], default='light', 
                        help='Chart style theme: light (default) or dark (TradingView-style)')
+    parser.add_argument('--use_ml', action='store_true', help='Use trained ML model for signals (default: False)')
     
     args = parser.parse_args()
     
     style_emoji = "🌙" if args.style == 'dark' else "☀️"
-    print(f"⚡ Fast MT5 Gold AI Trader - Backtest Runner")
+    print(f"MT5 Gold AI Trader - Backtest Runner")
     print(f"Strategy: {args.strategy.upper()}")
     print(f"Symbol: {args.symbol}")
-    print(f"Chart Style: {style_emoji} {args.style.upper()} theme\n")
+    print(f"Chart Style: {style_emoji} {args.style.upper()} theme")
+    print(f"Use ML: {args.use_ml}")
     
     try:
-        results = run_backtest(strategy_param=args.strategy, symbol=args.symbol, chart_style=args.style)
-        print(f"\n✅ Backtest completed successfully!")
+        results = run_backtest(strategy_param=args.strategy, symbol=args.symbol, chart_style=args.style, use_ml=args.use_ml)
+        print(f"\nBacktest completed successfully!")
         
     except Exception as e:
-        print(f"❌ Error running backtest: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error running backtest: {e}")
