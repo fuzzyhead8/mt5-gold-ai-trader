@@ -42,6 +42,7 @@ class ScalpingStrategy(BaseStrategy):
     def generate_signals(self, data):
         """
         Enhanced scalping strategy with multiple indicators and risk management
+        Vectorized version for performance optimization
         """
         # Ensure we have required columns
         required_cols = ['close', 'high', 'low', 'tick_volume']
@@ -52,7 +53,7 @@ class ScalpingStrategy(BaseStrategy):
                 else:
                     raise ValueError(f"Required column '{col}' missing from data")
         
-        # Calculate technical indicators optimized for scalping
+        # Calculate technical indicators optimized for scalping (vectorized)
         data['ema_fast'] = data['close'].ewm(span=5).mean()  # Fast EMA (optimized)
         data['ema_slow'] = data['close'].ewm(span=13).mean()   # Slow EMA (Fibonacci number)
         data['rsi'] = self._calculate_rsi(data['close'], window=5)
@@ -71,6 +72,7 @@ class ScalpingStrategy(BaseStrategy):
         # Volatility measures
         data['atr'] = (data['high'] - data['low']).rolling(window=7).mean()
         data['volatility'] = data['close'].rolling(window=10).std()
+        data['volatility_ma20'] = data['volatility'].rolling(20).mean()
         
         # Momentum indicators
         data['momentum_3'] = self._calculate_momentum(data['close'], 3)
@@ -80,85 +82,74 @@ class ScalpingStrategy(BaseStrategy):
         # Price action indicators
         data['price_vs_ema'] = (data['close'] - data['ema_slow']) / data['ema_slow']
         
-        # Generate signals
-        signal = []
-        for i in range(1, len(data)):
-            current_time = data.index[i] if hasattr(data, 'index') and hasattr(data.index[i], 'hour') else None
-            
-            # Check if market is active
-            if current_time and not self._is_market_active(current_time):
-                signal.append('hold')
-                continue
-            
-            # Current values
-            ema_fast_curr = data['ema_fast'].iloc[i]
-            ema_fast_prev = data['ema_fast'].iloc[i-1]
-            ema_slow_curr = data['ema_slow'].iloc[i]
-            ema_slow_prev = data['ema_slow'].iloc[i-1]
-            rsi_curr = data['rsi'].iloc[i]
-            volume_ratio = data['volume_ratio'].iloc[i]
-            close_curr = data['close'].iloc[i]
-            bb_upper = data['bb_upper'].iloc[i]
-            bb_lower = data['bb_lower'].iloc[i]
-            bb_middle = data['bb_middle'].iloc[i]
-            momentum = data['momentum_3'].iloc[i]
-            momentum_5 = data['momentum_5'].iloc[i]
-            tick_volume = data['tick_volume'].iloc[i]
-            volatility = data['volatility'].iloc[i]
-            atr = data['atr'].iloc[i]
-            price_pos = data['price_position'].iloc[i]
-            trend_strength = data['trend_strength'].iloc[i]
-            price_vs_ema = data['price_vs_ema'].iloc[i]
-            
-            # Skip if insufficient volume or extreme volatility (balanced filtering)
-            if (tick_volume < self.min_volume or 
-                pd.isna(volume_ratio) or 
-                volatility > data['close'].iloc[i] * 0.001):  # 0.1% volatility limit (middle ground)
-                signal.append('hold')
-                continue
-            
-            # BUY CONDITIONS (Balanced approach - quality over quantity)
-            buy_conditions = [
-                # Strong trend confirmation with crossover
-                ema_fast_curr > ema_slow_curr and ema_fast_prev <= ema_slow_prev,
-                # RSI in favorable range but not extreme
-                30 < rsi_curr < 65,
-                # Price near lower BB (oversold)
-                price_pos < 0.4,
-                # Positive momentum
-                momentum > 0,
-                # Above average volume
-                volume_ratio > 1.0,
-                # Controlled volatility
-                volatility < data['volatility'].rolling(20).mean().iloc[i] * 1.3
-            ]
-            
-            # SELL CONDITIONS (Balanced approach - quality over quantity)
-            sell_conditions = [
-                # Strong trend confirmation with crossover
-                ema_fast_curr < ema_slow_curr and ema_fast_prev >= ema_slow_prev,
-                # RSI in favorable range but not extreme
-                35 < rsi_curr < 70,
-                # Price near upper BB (overbought)
-                price_pos > 0.6,
-                # Negative momentum
-                momentum < 0,
-                # Above average volume
-                volume_ratio > 1.0,
-                # Controlled volatility
-                volatility < data['volatility'].rolling(20).mean().iloc[i] * 1.3
-            ]
-            
-            # Balanced signal logic for optimal trade frequency
-            if sum(buy_conditions) >= 4:  # Back to working threshold
-                signal.append('buy')
-            elif sum(sell_conditions) >= 4:  # Back to working threshold
-                signal.append('sell')
-            else:
-                signal.append('hold')
-
-        signal.insert(0, 'hold')  # no signal for first row
-        data['signal'] = signal
+        # Market active mask (vectorized - assuming datetime index)
+        if hasattr(data.index, 'hour'):
+            data['hour'] = data.index.hour
+            active_market = ~((data['hour'] >= 4) & (data['hour'] <= 6))
+            data.drop('hour', axis=1, inplace=True)
+        else:
+            active_market = pd.Series(True, index=data.index)
+        
+        # Skip conditions (vectorized)
+        insufficient_volume = data['tick_volume'] < self.min_volume
+        invalid_volume = data['volume_ratio'].isna()
+        extreme_volatility = data['volatility'] > data['close'] * 0.001
+        skip_mask = insufficient_volume | invalid_volume | extreme_volatility
+        
+        # EMA crossovers (vectorized)
+        buy_crossover = (data['ema_fast'] > data['ema_slow']) & (data['ema_fast'].shift(1) <= data['ema_slow'].shift(1))
+        sell_crossover = (data['ema_fast'] < data['ema_slow']) & (data['ema_fast'].shift(1) >= data['ema_slow'].shift(1))
+        
+        # BUY CONDITIONS (vectorized boolean series)
+        buy_rsi = (data['rsi'] > 30) & (data['rsi'] < 65)
+        buy_bb = data['price_position'] < 0.4
+        buy_momentum = data['momentum_3'] > 0
+        buy_volume = data['volume_ratio'] > 1.0
+        buy_volatility = data['volatility'] < data['volatility_ma20'] * 1.3
+        
+        buy_conditions = pd.DataFrame({
+            'crossover': buy_crossover,
+            'rsi': buy_rsi,
+            'bb': buy_bb,
+            'momentum': buy_momentum,
+            'volume': buy_volume,
+            'volatility': buy_volatility
+        }, index=data.index)
+        
+        # SELL CONDITIONS
+        sell_rsi = (data['rsi'] > 35) & (data['rsi'] < 70)
+        sell_bb = data['price_position'] > 0.6
+        sell_momentum = data['momentum_3'] < 0
+        sell_volume = data['volume_ratio'] > 1.0
+        sell_volatility = data['volatility'] < data['volatility_ma20'] * 1.3
+        
+        sell_conditions = pd.DataFrame({
+            'crossover': sell_crossover,
+            'rsi': sell_rsi,
+            'bb': sell_bb,
+            'momentum': sell_momentum,
+            'volume': sell_volume,
+            'volatility': sell_volatility
+        }, index=data.index)
+        
+        # Calculate scores (sum of True values)
+        buy_score = buy_conditions.sum(axis=1)
+        sell_score = sell_conditions.sum(axis=1)
+        
+        # Generate signals (vectorized)
+        data['signal'] = 'hold'
+        valid_mask = active_market & ~skip_mask
+        
+        data.loc[valid_mask & (buy_score >= 4), 'signal'] = 'buy'
+        data.loc[valid_mask & (sell_score >= 4), 'signal'] = 'sell'
+        
+        # Insert hold for first row if needed
+        if data['signal'].iloc[0] != 'hold':
+            data.iloc[0, data.columns.get_loc('signal')] = 'hold'
+        
+        # Drop temporary columns
+        temp_cols = ['trend_strength', 'price_vs_ema', 'volatility_ma20', 'momentum_5']
+        data.drop(columns=[col for col in temp_cols if col in data.columns], inplace=True, errors='ignore')
         
         # Return enhanced data with all indicators
         return data[['close', 'signal', 'rsi', 'volume_ratio', 'volatility', 'ema_fast', 'ema_slow', 'bb_upper', 'bb_lower']]

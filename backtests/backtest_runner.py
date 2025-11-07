@@ -60,7 +60,8 @@ class BacktestRunner:
                 'volume_down': '#EF5350',
                 'profit_green': '#00C851',
                 'loss_red': '#FF4444',
-                'neutral': '#9E9E9E'
+                'neutral': '#9E9E9E',
+                'buy_hold_purple': '#8A2BE2'
             }
         else:
             # Light Theme Colors (Default)
@@ -76,7 +77,8 @@ class BacktestRunner:
                 'volume_down': '#F44336',
                 'profit_green': '#4CAF50',
                 'loss_red': '#F44336',
-                'neutral': '#757575'
+                'neutral': '#757575',
+                'buy_hold_purple': '#8A2BE2'
             }
 
     def _load_data(self, timeframe: str):
@@ -569,9 +571,19 @@ class BacktestRunner:
             # Add Buy & Hold benchmark
             buy_hold = result['close'] / result['close'].iloc[0]
             buy_hold_return = (buy_hold.iloc[-1] - 1) * 100
+            
+            # Plot Buy & Hold line in purple
             ax2.plot(result.index, buy_hold, 
-                    color=self.colors['sell_signal'], linewidth=2, alpha=0.8,
+                    color=self.colors['buy_hold_purple'], linewidth=2, alpha=0.8,
                     label=f'Buy & Hold ({buy_hold_return:+.2f}%)')
+            
+            # Add shadows (fill between) for Buy & Hold
+            ax2.fill_between(result.index, 1.0, buy_hold, 
+                           where=(buy_hold >= 1.0), 
+                           color=self.colors['buy_hold_purple'], alpha=0.15, interpolate=True)
+            ax2.fill_between(result.index, 1.0, buy_hold, 
+                           where=(buy_hold < 1.0), 
+                           color=self.colors['buy_hold_purple'], alpha=0.15, interpolate=True)
             
             ax2.set_title(f'{strategy_name.upper()} Strategy - Equity Growth', 
                          color=self.colors['text'], fontsize=14, fontweight='bold', pad=15)

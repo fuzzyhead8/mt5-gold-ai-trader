@@ -41,77 +41,85 @@ class DayTradingStrategy(BaseStrategy):
     def generate_signals(self, data):
         """
         Enhanced day trading strategy with RSI, trend filtering, and volume confirmation
+        Vectorized version for performance optimization
         """
         # Ensure we have required columns
         if 'tick_volume' not in data.columns:
             data['tick_volume'] = 100  # Default volume if missing
         
-        # Calculate technical indicators
+        # Calculate technical indicators (vectorized)
         data['RSI'] = self._calculate_rsi(data['close'], self.rsi_period)
         data['EMA_fast'] = self._calculate_ema(data['close'], self.ema_fast)
         data['EMA_slow'] = self._calculate_ema(data['close'], self.ema_slow)
         
-        # Volume analysis
+        # Volume analysis (vectorized)
         data['volume_ma'] = data['tick_volume'].rolling(window=20).mean()
         data['volume_ratio'] = data['tick_volume'] / data['volume_ma']
         
-        # Price momentum and volatility
+        # Price momentum and volatility (vectorized)
         data['price_change'] = data['close'].pct_change()
         data['volatility'] = data['close'].rolling(window=20).std()
-        data['atr'] = ((data['high'] - data['low']).rolling(window=14).mean())
+        data['atr'] = (data['high'] - data['low']).rolling(window=14).mean()
         
-        # Trend direction
+        # Trend direction (vectorized)
         data['trend'] = np.where(data['EMA_fast'] > data['EMA_slow'], 1, -1)
+        data['trend_up'] = data['trend'] == 1
+        data['trend_down'] = data['trend'] == -1
         
-        signals = []
-        for i in range(len(data)):
-            if i == 0:
-                signals.append('hold')
-                continue
-                
-            # Current values
-            rsi = data['RSI'].iloc[i]
-            ema_fast = data['EMA_fast'].iloc[i]
-            ema_slow = data['EMA_slow'].iloc[i]
-            volume_ratio = data['volume_ratio'].iloc[i]
-            trend = data['trend'].iloc[i]
-            volatility = data['volatility'].iloc[i]
-            tick_volume = data['tick_volume'].iloc[i]
-            
-            # Skip if insufficient data or extreme conditions
-            if (pd.isna(rsi) or pd.isna(ema_fast) or pd.isna(ema_slow) or 
-                tick_volume < self.volume_threshold):
-                signals.append('hold')
-                continue
-            
-            # Note: Removed time-based filtering to allow more signals during training
-                
-            # Enhanced signal logic with multiple confirmations
-            signal = 'hold'
-            
-            # More balanced signal generation with tighter controls
-            
-            # BUY conditions - require RSI oversold AND trending up
-            if (rsi < self.rsi_oversold and trend == 1 and 
-                volume_ratio > 1.0 and 
-                data['EMA_fast'].iloc[i] > data['EMA_fast'].iloc[i-1]):  # EMA fast rising
-                signal = 'buy'
-                
-            # SELL conditions - require RSI overbought AND trending down
-            elif (rsi > self.rsi_overbought and trend == -1 and 
-                  volume_ratio > 1.0 and 
-                  data['EMA_fast'].iloc[i] < data['EMA_fast'].iloc[i-1]):  # EMA fast falling
-                signal = 'sell'
-                
-            # Additional opportunity - RSI reversal signals
-            elif rsi < 30 and trend == 1:  # Strong oversold in uptrend
-                signal = 'buy'
-            elif rsi > 70 and trend == -1:  # Strong overbought in downtrend
-                signal = 'sell'
-            
-            signals.append(signal)
-
-        data['signal'] = signals
+        # EMA momentum (vectorized)
+        data['ema_fast_rising'] = data['EMA_fast'] > data['EMA_fast'].shift(1)
+        data['ema_fast_falling'] = data['EMA_fast'] < data['EMA_fast'].shift(1)
+        
+        # Valid data mask (vectorized)
+        valid_data = (
+            (~data['RSI'].isna()) &
+            (~data['EMA_fast'].isna()) &
+            (~data['EMA_slow'].isna()) &
+            (data['tick_volume'] >= self.volume_threshold) &
+            (data['volume_ratio'] > 0)  # Avoid division issues
+        )
+        
+        # Initialize signals
+        data['signal'] = 'hold'
+        
+        # BUY conditions (vectorized)
+        buy_condition1 = (
+            (data['RSI'] < self.rsi_oversold) &
+            data['trend_up'] &
+            (data['volume_ratio'] > 1.0) &
+            data['ema_fast_rising']
+        )
+        
+        buy_condition2 = (
+            (data['RSI'] < 30) &
+            data['trend_up']
+        )
+        
+        # SELL conditions (vectorized)
+        sell_condition1 = (
+            (data['RSI'] > self.rsi_overbought) &
+            data['trend_down'] &
+            (data['volume_ratio'] > 1.0) &
+            data['ema_fast_falling']
+        )
+        
+        sell_condition2 = (
+            (data['RSI'] > 70) &
+            data['trend_down']
+        )
+        
+        # Apply signals where data is valid
+        data.loc[valid_data & buy_condition1, 'signal'] = 'buy'
+        data.loc[valid_data & buy_condition2 & ~buy_condition1, 'signal'] = 'buy'  # Additional only if not already buy
+        data.loc[valid_data & sell_condition1, 'signal'] = 'sell'
+        data.loc[valid_data & sell_condition2 & ~sell_condition1, 'signal'] = 'sell'  # Additional only if not already sell
+        
+        # Set first row to hold
+        data.iloc[0, data.columns.get_loc('signal')] = 'hold'
+        
+        # Drop temporary columns (keep 'trend' for return)
+        temp_cols = ['trend_up', 'trend_down', 'ema_fast_rising', 'ema_fast_falling']
+        data.drop(columns=[col for col in temp_cols if col in data.columns], inplace=True, errors='ignore')
         
         # Return enhanced dataset with indicators
         return data[['close', 'RSI', 'EMA_fast', 'EMA_slow', 'signal', 'volume_ratio', 'volatility', 'trend']]

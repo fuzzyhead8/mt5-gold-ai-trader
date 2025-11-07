@@ -100,6 +100,7 @@ class GoldStormStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Generate trading signals based on GoldStorm strategy logic
+        Vectorized version for performance optimization
         
         Args:
             df: DataFrame with OHLCV data
@@ -109,64 +110,66 @@ class GoldStormStrategy(BaseStrategy):
         """
         df = df.copy()
         
-        # Calculate technical indicators
+        # Calculate technical indicators (vectorized)
         df['rsi'] = self.calculate_rsi(df, self.config.momentum_period)
         df['atr'] = self.calculate_atr(df, self.config.volatility_period)
         df['volatility_ratio'] = self.calculate_volatility_ratio(df)
         
-        # Initialize signal column
+        # Initialize columns
         df['signal'] = 'hold'
         df['momentum'] = 'NEUTRAL'
-        
-        # Generate signals for each row
-        for i in range(len(df)):
-            # Skip insufficient data
-            if i < max(self.config.volatility_period, self.config.momentum_period, 50):
-                continue
-            
-            # Check volatility condition
-            volatility_ratio = df['volatility_ratio'].iloc[i]
-            is_high_volatility = volatility_ratio > self.config.min_volatility_threshold
-            
-            if not is_high_volatility:
-                continue
-            
-            # Get momentum signal
-            momentum_signal = self.get_momentum_signal(df, i)
-            df.loc[df.index[i], 'momentum'] = momentum_signal
-            
-            if momentum_signal == "NEUTRAL":
-                continue
-            
-            # Generate trading signals based on momentum
-            if momentum_signal in ["STRONG_BULLISH", "BULLISH"]:
-                # Additional confirmation: check if we're not overbought
-                if df['rsi'].iloc[i] < 80:  # Not too overbought
-                    df.loc[df.index[i], 'signal'] = 'buy'
-                    
-            elif momentum_signal in ["STRONG_BEARISH", "BEARISH"]:
-                # Additional confirmation: check if we're not oversold
-                if df['rsi'].iloc[i] > 20:  # Not too oversold
-                    df.loc[df.index[i], 'signal'] = 'sell'
-        
-        # Add position sizing information (for backtesting)
         df['position_size'] = 1.0  # Standard position size
-        
-        # Add stop loss and take profit levels
         df['stop_loss'] = np.nan
         df['take_profit'] = np.nan
         
-        for i in range(len(df)):
-            if df['signal'].iloc[i] in ['buy', 'sell']:
-                atr_value = df['atr'].iloc[i]
-                current_price = df['close'].iloc[i]
-                
-                if df['signal'].iloc[i] == 'buy':
-                    df.loc[df.index[i], 'stop_loss'] = current_price - (atr_value * 1.5)
-                    df.loc[df.index[i], 'take_profit'] = current_price + (atr_value * 3.0)
-                else:  # sell
-                    df.loc[df.index[i], 'stop_loss'] = current_price + (atr_value * 1.5)
-                    df.loc[df.index[i], 'take_profit'] = current_price - (atr_value * 3.0)
+        # Minimum data requirement
+        min_data_idx = max(self.config.volatility_period, self.config.momentum_period, 50)
+        valid_mask = pd.Series([i >= min_data_idx for i in range(len(df))], index=df.index)
+        
+        # Volatility condition (vectorized)
+        high_volatility = df['volatility_ratio'] > self.config.min_volatility_threshold
+        
+        # Vectorized momentum logic (inline get_momentum_signal)
+        # Price change over last 5 periods
+        df['price_change_5'] = df['close'] - df['close'].shift(5)
+        
+        # Momentum conditions
+        strong_bullish = (df['rsi'] > 70) & (df['price_change_5'] > 0)
+        strong_bearish = (df['rsi'] < 30) & (df['price_change_5'] < 0)
+        bullish = (df['rsi'] > 50) & (df['price_change_5'] > 0)
+        bearish = (df['rsi'] < 50) & (df['price_change_5'] < 0)
+        
+        # Assign momentum (priority: strong > normal)
+        df.loc[strong_bullish, 'momentum'] = 'STRONG_BULLISH'
+        df.loc[strong_bearish, 'momentum'] = 'STRONG_BEARISH'
+        df.loc[(~strong_bullish) & bullish, 'momentum'] = 'BULLISH'
+        df.loc[(~strong_bearish) & bearish, 'momentum'] = 'BEARISH'
+        
+        # Generate signals (vectorized)
+        # Bullish signals
+        bullish_signals = df['momentum'].isin(['STRONG_BULLISH', 'BULLISH']) & (df['rsi'] < 80)
+        df.loc[valid_mask & high_volatility & bullish_signals, 'signal'] = 'buy'
+        
+        # Bearish signals
+        bearish_signals = df['momentum'].isin(['STRONG_BEARISH', 'BEARISH']) & (df['rsi'] > 20)
+        df.loc[valid_mask & high_volatility & bearish_signals, 'signal'] = 'sell'
+        
+        # Vectorized stop loss and take profit calculation
+        atr_multiplier_sl = 1.5
+        atr_multiplier_tp = 3.0
+        
+        buy_mask = (df['signal'] == 'buy') & valid_mask
+        sell_mask = (df['signal'] == 'sell') & valid_mask
+        
+        df.loc[buy_mask, 'stop_loss'] = df.loc[buy_mask, 'close'] - (df.loc[buy_mask, 'atr'] * atr_multiplier_sl)
+        df.loc[buy_mask, 'take_profit'] = df.loc[buy_mask, 'close'] + (df.loc[buy_mask, 'atr'] * atr_multiplier_tp)
+        
+        df.loc[sell_mask, 'stop_loss'] = df.loc[sell_mask, 'close'] + (df.loc[sell_mask, 'atr'] * atr_multiplier_sl)
+        df.loc[sell_mask, 'take_profit'] = df.loc[sell_mask, 'close'] - (df.loc[sell_mask, 'atr'] * atr_multiplier_tp)
+        
+        # Drop temporary column
+        if 'price_change_5' in df.columns:
+            df.drop('price_change_5', axis=1, inplace=True)
         
         return df
     

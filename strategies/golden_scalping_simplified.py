@@ -47,6 +47,7 @@ class GoldenScalpingStrategySimplified(BaseStrategy):
         """
         SIMPLIFIED GOLDEN FORMULA: Focus on 3-4 robust indicators
         Reduces overfitting and improves live trading alignment
+        Vectorized version for performance optimization
         """
         # Ensure required columns
         required_cols = ['open', 'high', 'low', 'close', 'tick_volume']
@@ -57,92 +58,69 @@ class GoldenScalpingStrategySimplified(BaseStrategy):
                 else:
                     raise ValueError(f"Required column '{col}' missing from data")
         
-        # Core indicators - simplified and robust
+        # Core indicators - simplified and robust (vectorized)
         data['ema_fast'] = data['close'].ewm(span=8).mean()
         data['ema_slow'] = data['close'].ewm(span=21).mean()
         data['rsi'] = self._calculate_rsi(data['close'], window=14)
         data['macd'], data['macd_signal'], data['macd_histogram'] = self._calculate_macd(data['close'])
         
-        # Price momentum (simplified)
+        # Price momentum (simplified) and volume (vectorized)
         data['price_momentum'] = data['close'].pct_change(3)
         data['volume_avg'] = data['tick_volume'].rolling(window=20).mean()
         
-        # Generate signals using SIMPLIFIED GOLDEN FORMULA
-        signal = []
+        # EMA momentum (vectorized)
+        data['ema_fast_rising'] = data['ema_fast'] > data['ema_fast'].shift(1)
+        data['ema_fast_falling'] = data['ema_fast'] < data['ema_fast'].shift(1)
         
-        for i in range(max(26, len(data.columns)), len(data)):
-            current_time = data.index[i] if hasattr(data, 'index') and hasattr(data.index[i], 'hour') else None
-            
-            # Check trading time validity
-            if current_time and not self._is_valid_trading_time(current_time):
-                signal.append('hold')
-                continue
-            
-            # Current values
-            close_curr = data['close'].iloc[i]
-            volume_curr = data['tick_volume'].iloc[i]
-            rsi_curr = data['rsi'].iloc[i]
-            macd_hist = data['macd_histogram'].iloc[i]
-            macd_hist_prev = data['macd_histogram'].iloc[i-1]
-            price_momentum = data['price_momentum'].iloc[i]
-            volume_avg = data['volume_avg'].iloc[i]
-            
-            # EMA conditions
-            ema_fast = data['ema_fast'].iloc[i]
-            ema_slow = data['ema_slow'].iloc[i]
-            ema_fast_prev = data['ema_fast'].iloc[i-1]
-            ema_slow_prev = data['ema_slow'].iloc[i-1]
-            
-            # Skip if insufficient data or volume
-            if (volume_curr < self.min_volume or 
-                pd.isna(rsi_curr) or pd.isna(macd_hist)):
-                signal.append('hold')
-                continue
-            
-            # SIMPLIFIED BUY CONDITIONS (4 robust conditions, require ALL 4)
-            buy_conditions = [
-                # 1. Trend alignment - EMA crossover or strong alignment
-                (ema_fast > ema_slow) and (ema_fast > ema_fast_prev),
-                
-                # 2. RSI not overbought and showing momentum
-                25 < rsi_curr < 70,
-                
-                # 3. MACD showing positive momentum
-                macd_hist > macd_hist_prev and macd_hist > -0.5,
-                
-                # 4. Price momentum positive and volume adequate
-                price_momentum > 0.0001 and volume_curr > volume_avg * 0.8
-            ]
-            
-            # SIMPLIFIED SELL CONDITIONS (4 robust conditions, require ALL 4)
-            sell_conditions = [
-                # 1. Trend alignment - EMA crossover or strong alignment
-                (ema_fast < ema_slow) and (ema_fast < ema_fast_prev),
-                
-                # 2. RSI not oversold and showing momentum
-                30 < rsi_curr < 75,
-                
-                # 3. MACD showing negative momentum
-                macd_hist < macd_hist_prev and macd_hist < 0.5,
-                
-                # 4. Price momentum negative and volume adequate
-                price_momentum < -0.0001 and volume_curr > volume_avg * 0.8
-            ]
-            
-            # SIMPLIFIED FORMULA: Require ALL conditions (no partial scoring)
-            # This reduces false signals and overfitting
-            if all(buy_conditions):
-                signal.append('buy')
-            elif all(sell_conditions):
-                signal.append('sell')
-            else:
-                signal.append('hold')
+        # MACD momentum (vectorized)
+        data['macd_hist_improving'] = data['macd_histogram'] > data['macd_histogram'].shift(1)
+        data['macd_hist_deteriorating'] = data['macd_histogram'] < data['macd_histogram'].shift(1)
         
-        # Fill initial signals
-        for _ in range(len(data) - len(signal)):
-            signal.insert(0, 'hold')
+        # Trading time validity (vectorized)
+        if hasattr(data.index, 'hour'):
+            data['hour'] = data.index.hour
+            valid_time = ~(((data['hour'] >= 22) | (data['hour'] <= 3)))
+            data.drop('hour', axis=1, inplace=True)
+        else:
+            valid_time = pd.Series(True, index=data.index)
         
-        data['signal'] = signal
+        # Skip conditions (vectorized)
+        insufficient_volume = data['tick_volume'] < self.min_volume
+        invalid_rsi = data['rsi'].isna()
+        invalid_macd = data['macd_histogram'].isna()
+        skip_mask = insufficient_volume | invalid_rsi | invalid_macd
+        
+        # SIMPLIFIED BUY CONDITIONS (all 4 required - vectorized AND)
+        buy_trend = (data['ema_fast'] > data['ema_slow']) & data['ema_fast_rising']
+        buy_rsi = (data['rsi'] > 25) & (data['rsi'] < 70)
+        buy_macd = data['macd_hist_improving'] & (data['macd_histogram'] > -0.5)
+        buy_momentum = (data['price_momentum'] > 0.0001) & (data['tick_volume'] > data['volume_avg'] * 0.8)
+        
+        buy_signal = buy_trend & buy_rsi & buy_macd & buy_momentum
+        
+        # SIMPLIFIED SELL CONDITIONS (all 4 required - vectorized AND)
+        sell_trend = (data['ema_fast'] < data['ema_slow']) & data['ema_fast_falling']
+        sell_rsi = (data['rsi'] > 30) & (data['rsi'] < 75)
+        sell_macd = data['macd_hist_deteriorating'] & (data['macd_histogram'] < 0.5)
+        sell_momentum = (data['price_momentum'] < -0.0001) & (data['tick_volume'] > data['volume_avg'] * 0.8)
+        
+        sell_signal = sell_trend & sell_rsi & sell_macd & sell_momentum
+        
+        # Generate signals (vectorized)
+        data['signal'] = 'hold'
+        valid_mask = valid_time & ~skip_mask
+        
+        data.loc[valid_mask & buy_signal, 'signal'] = 'buy'
+        data.loc[valid_mask & sell_signal, 'signal'] = 'sell'
+        
+        # Fill initial signals with hold (up to the point where indicators are valid)
+        first_valid_idx = max(26, data.index.get_loc(data.first_valid_index()) if hasattr(data, 'first_valid_index') else 0)
+        data.iloc[:first_valid_idx, data.columns.get_loc('signal')] = 'hold'
+        
+        # Drop temporary columns
+        temp_cols = ['ema_fast_rising', 'ema_fast_falling', 'macd_hist_improving', 
+                     'macd_hist_deteriorating', 'volume_avg']
+        data.drop(columns=[col for col in temp_cols if col in data.columns], inplace=True, errors='ignore')
         
         # Return essential columns only
         return_cols = ['open', 'high', 'low', 'close', 'signal', 'rsi', 'macd_histogram', 

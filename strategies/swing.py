@@ -10,23 +10,32 @@ class SwingTradingStrategy(BaseStrategy):
     def generate_signals(self, data):
         """
         Example: MACD cross strategy
+        Vectorized version for performance optimization
         """
         data['EMA12'] = data['close'].ewm(span=12, adjust=False).mean()
         data['EMA26'] = data['close'].ewm(span=26, adjust=False).mean()
         data['MACD'] = data['EMA12'] - data['EMA26']
         data['Signal_Line'] = data['MACD'].ewm(span=9, adjust=False).mean()
 
-        signals = []
-        for i in range(1, len(data)):
-            if data['MACD'].iloc[i] > data['Signal_Line'].iloc[i] and data['MACD'].iloc[i-1] <= data['Signal_Line'].iloc[i-1]:
-                signals.append('buy')
-            elif data['MACD'].iloc[i] < data['Signal_Line'].iloc[i] and data['MACD'].iloc[i-1] >= data['Signal_Line'].iloc[i-1]:
-                signals.append('sell')
-            else:
-                signals.append('hold')
+        # Vectorized crossover detection
+        buy_crossover = (
+            (data['MACD'] > data['Signal_Line']) &
+            (data['MACD'].shift(1) <= data['Signal_Line'].shift(1))
+        ).fillna(False)
 
-        signals.insert(0, 'hold')
-        data['signal'] = signals
+        sell_crossover = (
+            (data['MACD'] < data['Signal_Line']) &
+            (data['MACD'].shift(1) >= data['Signal_Line'].shift(1))
+        ).fillna(False)
+
+        # Generate signals vectorized
+        data['signal'] = 'hold'
+        data.loc[buy_crossover, 'signal'] = 'buy'
+        data.loc[sell_crossover, 'signal'] = 'sell'
+
+        # Ensure first signal is hold
+        data.iloc[0, data.columns.get_loc('signal')] = 'hold'
+
         return data[['close', 'MACD', 'Signal_Line', 'signal']]
 
     def get_strategy_config(self) -> dict:

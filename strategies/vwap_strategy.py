@@ -233,6 +233,7 @@ class VWAPStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Generate trading signals for the given dataframe
+        Vectorized version for performance optimization
         
         Args:
             df: DataFrame with OHLCV data
@@ -242,7 +243,7 @@ class VWAPStrategy(BaseStrategy):
         """
         result = df.copy()
         
-        # Calculate indicators
+        # Calculate indicators (vectorized)
         result['atr'] = self.calculate_atr(result, self.atr_period)
         result['rsi'] = self.calculate_rsi(result, self.rsi_period)
         result['ema_fast'] = self.calculate_ema(result, self.ema_fast)
@@ -252,30 +253,110 @@ class VWAPStrategy(BaseStrategy):
         # Initialize signal column
         result['signal'] = 'hold'
         
-        # Generate signals for each bar
-        for i in range(len(result)):
-            signal = self.check_entry_signals(result, i)
-            result.loc[result.index[i], 'signal'] = signal
+        # Vectorized trend determination
+        result['trend'] = np.where(result['ema_fast'] > result['ema_slow'], 'bullish', 
+                                   np.where(result['ema_fast'] < result['ema_slow'], 'bearish', 'neutral'))
         
-        # Add risk management levels
-        result['stop_loss'] = np.nan
-        result['take_profit_1'] = np.nan
-        result['take_profit_2'] = np.nan
+        # Vectorized VWAP proximity (within 0.2%)
+        result['near_vwap'] = abs(result['close'] - result['vwap']) / result['vwap'] < 0.002
         
-        for i in range(len(result)):
-            if result['signal'].iloc[i] in ['buy', 'sell']:
-                atr = result['atr'].iloc[i]
-                close = result['close'].iloc[i]
-                idx = result.index[i]
-                
-                if result['signal'].iloc[i] == 'buy':
-                    result.loc[idx, 'stop_loss'] = close - (atr * self.stop_loss_atr_mult)
-                    result.loc[idx, 'take_profit_1'] = close + (atr * self.tp1_atr_mult)
-                    result.loc[idx, 'take_profit_2'] = close + (atr * self.tp2_atr_mult)
-                else:  # sell
-                    result.loc[idx, 'stop_loss'] = close + (atr * self.stop_loss_atr_mult)
-                    result.loc[idx, 'take_profit_1'] = close - (atr * self.tp1_atr_mult)
-                    result.loc[idx, 'take_profit_2'] = close - (atr * self.tp2_atr_mult)
+        # Vectorized engulfing patterns
+        prev_open = result['open'].shift(1)
+        prev_close = result['close'].shift(1)
+        prev_high = result['high'].shift(1)
+        prev_low = result['low'].shift(1)
+        
+        # Bullish engulfing
+        bullish_engulfing = (
+            (prev_close < prev_open) &  # Previous red
+            (result['close'] > result['open']) &  # Current green
+            (result['open'] <= prev_close) &  # Opens at/below prev close
+            (result['close'] >= prev_open)    # Closes at/above prev open
+        )
+        
+        # Bearish engulfing
+        bearish_engulfing = (
+            (prev_close > prev_open) &  # Previous green
+            (result['close'] < result['open']) &  # Current red
+            (result['open'] >= prev_close) &  # Opens at/above prev close
+            (result['close'] <= prev_open)    # Closes at/below prev open
+        )
+        
+        # Vectorized RSI divergence (simplified - check recent lows/highs)
+        # For bullish divergence: price lower low, RSI higher low
+        price_low_3 = result['close'].rolling(3).min()
+        rsi_low_3 = result['rsi'].rolling(3).min()
+        prev_price_low = price_low_3.shift(3)
+        prev_rsi_low = rsi_low_3.shift(3)
+        
+        bullish_divergence = (
+            (result['close'] < prev_price_low) &  # Lower price low
+            (result['rsi'] > prev_rsi_low) &      # Higher RSI low
+            (result['rsi'] < self.rsi_oversold)   # In oversold territory
+        )
+        
+        # Bearish divergence
+        price_high_3 = result['close'].rolling(3).max()
+        rsi_high_3 = result['rsi'].rolling(3).max()
+        prev_price_high = price_high_3.shift(3)
+        prev_rsi_high = rsi_high_3.shift(3)
+        
+        bearish_divergence = (
+            (result['close'] > prev_price_high) &  # Higher price high
+            (result['rsi'] < prev_rsi_high) &      # Lower RSI high
+            (result['rsi'] > (100 - self.rsi_oversold))  # In overbought territory
+        )
+        
+        # Vectorized breakout (last 3 candles)
+        range_high_3 = result['high'].rolling(3).max().shift(1)
+        range_low_3 = result['low'].rolling(3).min().shift(1)
+        avg_volume_3 = result['tick_volume'].rolling(3).mean().shift(1)
+        
+        bullish_breakout = (
+            (result['close'] > range_high_3) &
+            (result['trend'] == 'bullish') &
+            (result['tick_volume'] > avg_volume_3 * 1.2)
+        )
+        
+        bearish_breakdown = (
+            (result['close'] < range_low_3) &
+            (result['trend'] == 'bearish') &
+            (result['tick_volume'] > avg_volume_3 * 1.2)
+        )
+        
+        # Generate buy signals (OR conditions)
+        buy_signals = (
+            ((result['trend'] == 'bullish') & result['near_vwap'] & bullish_engulfing) |
+            ((result['trend'] == 'bullish') & (result['rsi'] < self.rsi_oversold) & bullish_divergence) |
+            bullish_breakout
+        )
+        result.loc[buy_signals, 'signal'] = 'buy'
+        
+        # Generate sell signals (OR conditions)
+        sell_signals = (
+            ((result['trend'] == 'bearish') & result['near_vwap'] & bearish_engulfing) |
+            ((result['trend'] == 'bearish') & (result['rsi'] > (100 - self.rsi_oversold)) & bearish_divergence) |
+            bearish_breakdown
+        )
+        result.loc[sell_signals, 'signal'] = 'sell'
+        
+        # Vectorized risk management levels
+        buy_mask = result['signal'] == 'buy'
+        sell_mask = result['signal'] == 'sell'
+        
+        result.loc[buy_mask, 'stop_loss'] = result.loc[buy_mask, 'close'] - (result.loc[buy_mask, 'atr'] * self.stop_loss_atr_mult)
+        result.loc[buy_mask, 'take_profit_1'] = result.loc[buy_mask, 'close'] + (result.loc[buy_mask, 'atr'] * self.tp1_atr_mult)
+        result.loc[buy_mask, 'take_profit_2'] = result.loc[buy_mask, 'close'] + (result.loc[buy_mask, 'atr'] * self.tp2_atr_mult)
+        
+        result.loc[sell_mask, 'stop_loss'] = result.loc[sell_mask, 'close'] + (result.loc[sell_mask, 'atr'] * self.stop_loss_atr_mult)
+        result.loc[sell_mask, 'take_profit_1'] = result.loc[sell_mask, 'close'] - (result.loc[sell_mask, 'atr'] * self.tp1_atr_mult)
+        result.loc[sell_mask, 'take_profit_2'] = result.loc[sell_mask, 'close'] - (result.loc[sell_mask, 'atr'] * self.tp2_atr_mult)
+        
+        # Drop temporary columns
+        temp_cols = ['trend', 'near_vwap', 'price_low_3', 'rsi_low_3', 'prev_price_low', 'prev_rsi_low',
+                     'price_high_3', 'rsi_high_3', 'prev_price_high', 'prev_rsi_high', 'range_high_3',
+                     'range_low_3', 'avg_volume_3']
+        result.drop(columns=[col for col in temp_cols if col in result.columns], inplace=True, errors='ignore')
         
         self.logger.info(f"Generated {len(result)} signals for {self.symbol}")
         return result
