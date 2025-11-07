@@ -401,13 +401,30 @@ class BacktestRunner:
         return trades
 
     def _run_single_strategy(self, strategy_type: str):
-        """Run a single strategy and return results"""
+        """Run a single strategy and return results - FIXED for no look-ahead bias"""
         print(f"\n{'='*70}")
-        print(f"🚀 {strategy_type.upper()} STRATEGY BACKTEST RESULTS")
+        print(f"🚀 {strategy_type.upper()} STRATEGY BACKTEST RESULTS (No Look-Ahead Bias)")
         print(f"{'='*70}")
         
         strategy = self._get_strategy(strategy_type)
-        result = strategy.generate_signals(self.data.copy())
+        
+        # FIXED: Generate signals progressively without look-ahead bias
+        result = self.data.copy()
+        signals = []
+        min_lookback = max(50, 200)  # Conservative minimum for indicators (adjust based on strategy)
+        
+        for i in range(len(result)):
+            if i < min_lookback:
+                signals.append('hold')
+            else:
+                # Use only past and current data up to i
+                current_data = result.iloc[:i+1].copy()
+                temp_result = strategy.generate_signals(current_data)
+                # Take the latest signal
+                latest_signal = temp_result['signal'].iloc[-1] if 'signal' in temp_result.columns else 'hold'
+                signals.append(latest_signal)
+        
+        result['signal'] = signals
         
         # Calculate performance
         result['returns'] = result['close'].pct_change().fillna(0)
@@ -439,11 +456,12 @@ class BacktestRunner:
         self._display_tradingview_style_metrics(metrics, strategy_type)
         
         # Save results to CSV
-        output_path = os.path.join(os.path.dirname(__file__), f"{strategy_type}_backtest.csv")
+        output_path = os.path.join(os.path.dirname(__file__), f"{strategy_type}_backtest_no_bias.csv")
         result.to_csv(output_path)
-        print(f"\n💾 Results saved to: {output_path}")
+        print(f"\n💾 Results saved to: {output_path} (No Look-Ahead Bias)")
         
         return result, metrics
+
 
     def _display_tradingview_style_metrics(self, metrics, strategy_type):
         """Display metrics in TradingView style with organized sections"""

@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
+import MetaTrader5 as mt5
+from strategies.base_strategy import BaseStrategy
 
-class DayTradingStrategy:
+class DayTradingStrategy(BaseStrategy):
     def __init__(self, symbol):
-        self.symbol = symbol
+        super().__init__(symbol)
         # Parameters optimized for M15 timeframe (daily trading) - Made less conservative
         self.rsi_period = 14  # Shorter period for more responsive signals
         self.rsi_overbought = 65  # Less extreme levels for more signals
@@ -11,6 +13,7 @@ class DayTradingStrategy:
         self.ema_fast = 12  # For trend filtering
         self.ema_slow = 26
         self.volume_threshold = 50  # Lower minimum volume threshold
+
 
     def _calculate_rsi(self, prices, window=14):
         """Calculate RSI with proper handling of edge cases"""

@@ -1,11 +1,14 @@
 import numpy as np
 import pandas as pd
+import MetaTrader5 as mt5
+from strategies.base_strategy import BaseStrategy
 
-class ScalpingStrategy:
+class ScalpingStrategy(BaseStrategy):
     def __init__(self, symbol):
-        self.symbol = symbol
+        super().__init__(symbol)
         self.min_volume = 50  # Moderate minimum tick volume 
         self.volatility_threshold = 2.5  # Dynamic volatility threshold
+
         
     def _calculate_rsi(self, prices, window=5):
         """Calculate RSI optimized for scalping (faster response)"""

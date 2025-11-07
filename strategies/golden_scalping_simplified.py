@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import MetaTrader5 as mt5
+from strategies.base_strategy import BaseStrategy
 
-class GoldenScalpingStrategySimplified:
+class GoldenScalpingStrategySimplified(BaseStrategy):
     """
     GOLDEN FORMULA - SIMPLIFIED VERSION
     Removes over-optimization and focuses on robust, fundamental indicators
@@ -9,8 +11,9 @@ class GoldenScalpingStrategySimplified:
     """
     
     def __init__(self, symbol):
-        self.symbol = symbol
+        super().__init__(symbol)
         self.min_volume = 30  # Reduced volume filter
+
         
     def _calculate_rsi(self, prices, window=14):
         """Standard RSI calculation"""

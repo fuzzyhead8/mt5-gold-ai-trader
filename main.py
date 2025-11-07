@@ -143,10 +143,19 @@ class TradingBot:
             logging.warning(f"News processing failed: {e}")
             return 0  # Neutral sentiment as fallback
 
-    def select_strategy(self, df: pd.DataFrame, sentiment_score: float) -> str:
+    def select_strategy(self, df: pd.DataFrame = None, sentiment_score: float = 0) -> str:
         """Select trading strategy based on market conditions"""
         if self.manual_strategy:
             return self.manual_strategy
+        
+        if df is None or len(df) < 10:
+            # Fallback to sentiment-based selection
+            if sentiment_score > 0.1:
+                return 'golden'
+            elif sentiment_score < -0.1:
+                return 'goldstorm'
+            else:
+                return 'multi_rsi_ema'  # Neutral default
         
         # Use classifier to predict best strategy
         try:
@@ -164,6 +173,7 @@ class TradingBot:
         except Exception as e:
             logging.error(f"Strategy prediction failed: {e}")
             return 'goldstorm'  # Default fallback
+
 
     def get_market_data(self, timeframe: int, bars: int = None) -> pd.DataFrame:
         """Fetch market data with retry logic"""
@@ -205,11 +215,9 @@ class TradingBot:
             sentiment_score = self.get_sentiment_score()
             sentiment_str = "bullish" if sentiment_score > 0 else "bearish" if sentiment_score < 0 else "neutral"
             
-            # Get market data for strategy selection
-            df_prediction = self.get_market_data(mt5.TIMEFRAME_M1, 100)
-            
-            # Select strategy
-            strategy_name = self.select_strategy(df_prediction, sentiment_score)
+            # Select strategy using sentiment (no data dependency to avoid timeframe mismatch)
+            strategy_name = self.select_strategy(sentiment_score=sentiment_score)
+
             
             if strategy_name not in self.strategies:
                 logging.error(f"Unknown strategy: {strategy_name}")
@@ -234,17 +242,33 @@ class TradingBot:
                 return
             
             # Execute strategy
+            positions_before = mt5.positions_get(symbol=self.symbol)
+            logging.info(f"Positions before execution: {len(positions_before) if positions_before else 0}")
+            
             if hasattr(strategy, 'execute_strategy'):
                 # New style strategy with built-in execution
-                strategy.execute_strategy(df, sentiment_str, self.acc_info['balance'])
+                result = strategy.execute_strategy(df, sentiment_str, self.acc_info['balance'])
+                logging.info(f"{strategy_name} execution result: {result}")
             else:
                 # Legacy strategy - just generate signals
                 signals = strategy.generate_signals(df)
                 latest_signal = signals['signal'].iloc[-1]
-                logging.info(f"{strategy_name} signal: {latest_signal} (legacy mode)")
+                logging.warning(f"{strategy_name} has NO execute_strategy() - won't trade! Signal: {latest_signal} (legacy mode)")
             
-            # Get sleep time from strategy config
-            sleep_time = config.get('sleep_time', 900)  # Default 15 minutes
+            positions_after = mt5.positions_get(symbol=self.symbol)
+            logging.info(f"Positions after execution: {len(positions_after) if positions_after else 0}")
+            
+            # Get sleep time from strategy config, adjusted by strategy
+            base_sleep = config.get('sleep_time', 900)
+            if strategy_name == 'multi_rsi_ema':
+                sleep_time = 60  # 1 minute for high-frequency
+            elif strategy_name in ['goldstorm', 'golden']:
+                sleep_time = 300  # 5 minutes
+            else:
+                sleep_time = base_sleep  # Default 15 minutes
+            
+            logging.info(f"Adjusted sleep time for {strategy_name}: {sleep_time} seconds")
+
             
             logging.info(f"{strategy_name} iteration completed. Sleeping for {sleep_time} seconds...")
             
