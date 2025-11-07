@@ -386,7 +386,7 @@ class BacktestRunner:
         # Calculate returns (vectorized)
         result['returns'] = result['close'].pct_change().fillna(0)
         
-        # Convert signals to positions (IMPROVED with normalization)
+        # Convert signals to positions (IMPROVED with numeric support for 0,1,-1)
         position = 0
         positions = []
         
@@ -395,26 +395,23 @@ class BacktestRunner:
                 positions.append(position)
                 continue
             
-            # Normalize different signal formats
-            if isinstance(signal, str):
-                signal_str = signal.lower()
-            elif isinstance(signal, (int, float)):
-                # Handle numeric signals: 1=buy, -1=sell, 0=hold
-                if signal > 0:
-                    signal_str = 'buy'
-                elif signal < 0:
-                    signal_str = 'sell'
+            if isinstance(signal, (int, float)):
+                new_position = int(signal)
+                if new_position in [0, 1, -1]:
+                    position = new_position
                 else:
-                    signal_str = 'hold'
+                    # Fallback to string logic if not 0,1,-1
+                    if signal > 0:
+                        position = 1
+                    elif signal < 0:
+                        position = -1
             else:
-                signal_str = 'hold'
-            
-            # Update position based on signal
-            if signal_str == 'buy':
-                position = 1
-            elif signal_str == 'sell':
-                position = -1
-            # 'hold' or unknown → keep current position
+                signal_str = str(signal).lower()
+                if signal_str == 'buy':
+                    position = 1
+                elif signal_str == 'sell':
+                    position = -1
+                # 'hold' keeps current position
             
             positions.append(position)
         
@@ -568,6 +565,13 @@ class BacktestRunner:
             
             ax2.fill_between(result.index, 1, result['cumulative'], 
                            color=equity_color, alpha=0.1)
+            
+            # Add Buy & Hold benchmark
+            buy_hold = result['close'] / result['close'].iloc[0]
+            buy_hold_return = (buy_hold.iloc[-1] - 1) * 100
+            ax2.plot(result.index, buy_hold, 
+                    color=self.colors['sell_signal'], linewidth=2, alpha=0.8,
+                    label=f'Buy & Hold ({buy_hold_return:+.2f}%)')
             
             ax2.set_title(f'{strategy_name.upper()} Strategy - Equity Growth', 
                          color=self.colors['text'], fontsize=14, fontweight='bold', pad=15)

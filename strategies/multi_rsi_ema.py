@@ -116,31 +116,35 @@ class MultiRSIEMAStrategy(BaseStrategy):
         bullish_market_position = pd.Series(market_position > 0.7, index=df.index)
         bearish_market_position = pd.Series(market_position < 0.3, index=df.index)
 
+        # Overall trend filter
+        uptrend = df['ema_34'] > df['ema_144']
+        downtrend = df['ema_34'] < df['ema_144']
+
         # Vectorized conditions for BUY
         n = len(df)
         strong_uptrend = (
-            (df['ema_34'] > df['ema_144'] * 1.003) &
+            (df['ema_34'] > df['ema_144'] * 1.001) &
             (df['ema_21'] > df['ema_34']) &
-            ((pos >= 50) & (df['close'] > df['sma_50'] * 1.005) | (pos < 50))
+            ((pos >= 50) & (df['close'] > df['sma_50'] * 1.002) | (pos < 50))
         )
 
         price_momentum = (pos >= 20) & (df['close'] > df['close_prev_max'])
-        price_above_key_ema = df['close'] > df['ema_34'] * 1.005
+        price_above_key_ema = df['close'] > df['ema_34'] * 1.002
 
-        rsi_34_very_bullish = df['rsi_34'] > 60
+        rsi_34_very_bullish = df['rsi_34'] > 55
         rsi_9_precise_pullback = (
-            (df['rsi_9_prev'] <= 40) &
+            (df['rsi_9_prev'] <= 45) &
             (df['rsi_9'] > 50) &
-            (df['rsi_9'] < 60)
+            (df['rsi_9'] < 65)
         )
         rsi_9_cross_above_34 = (
             (df['rsi_9_prev'] <= df['rsi_34_prev']) &
             (df['rsi_9'] > df['rsi_34'])
         )
         rsi_2_explosive_entry = (
-            (df['rsi_2_prev'] < 30) &
-            (df['rsi_2'] > 70) &
-            (df['rsi_2'] < 90)
+            (df['rsi_2_prev'] < 35) &
+            (df['rsi_2'] > 65) &
+            (df['rsi_2'] < 85)
         )
 
         momentum_20 = (pos >= 20) & (df['close'] > df['close_roll20'])
@@ -151,7 +155,7 @@ class MultiRSIEMAStrategy(BaseStrategy):
             (df['ema_34_shift1'] > df['ema_34_shift4'])
         ) | (pos < 4)
 
-        optimal_volatility = ((pos >= 14) & (df['volatility_14'] > 0.8) & (df['volatility_14'] < 3.5)) | (pos < 14)
+        optimal_volatility = ((pos >= 14) & (df['volatility_14'] > 0.5) & (df['volatility_14'] < 4.0)) | (pos < 14)
 
         price_higher_low = (pos >= 16) & (df['low_prev8_min'] > df['low_prev16_min'])
         rsi_divergence_bull = price_higher_low & (df['rsi_34'] > df['rsi_34_prev8_mean'])
@@ -169,7 +173,7 @@ class MultiRSIEMAStrategy(BaseStrategy):
             (df['sma_50'] > df['sma_50_shift5'])
         ) | (pos < 55)
 
-        not_overextended = df['close'] < df['recent_high_30'] * 0.998
+        not_overextended = df['close'] < df['recent_high_30'] * 0.995
 
         # Buy score
         buy_conditions = pd.concat([
@@ -195,28 +199,28 @@ class MultiRSIEMAStrategy(BaseStrategy):
 
         # Vectorized conditions for SELL
         strong_downtrend = (
-            (df['ema_34'] < df['ema_144'] * 0.997) &
+            (df['ema_34'] < df['ema_144'] * 0.999) &
             (df['ema_21'] < df['ema_34']) &
-            ((pos >= 50) & (df['close'] < df['sma_50'] * 0.995) | (pos < 50))
+            ((pos >= 50) & (df['close'] < df['sma_50'] * 0.998) | (pos < 50))
         )
 
         price_momentum_sell = (pos >= 20) & (df['close'] < df['close_prev_min'])
-        price_below_key_ema = df['close'] < df['ema_34'] * 0.995
+        price_below_key_ema = df['close'] < df['ema_34'] * 0.998
 
-        rsi_34_very_bearish = df['rsi_34'] < 40
+        rsi_34_very_bearish = df['rsi_34'] < 45
         rsi_9_precise_pullback_sell = (
-            (df['rsi_9_prev'] >= 60) &
+            (df['rsi_9_prev'] >= 55) &
             (df['rsi_9'] < 50) &
-            (df['rsi_9'] > 40)
+            (df['rsi_9'] > 35)
         )
         rsi_9_cross_below_34 = (
             (df['rsi_9_prev'] >= df['rsi_34_prev']) &
             (df['rsi_9'] < df['rsi_34'])
         )
         rsi_2_explosive_sell = (
-            (df['rsi_2_prev'] > 70) &
-            (df['rsi_2'] < 30) &
-            (df['rsi_2'] > 10)
+            (df['rsi_2_prev'] > 65) &
+            (df['rsi_2'] < 35) &
+            (df['rsi_2'] > 15)
         )
 
         momentum_20_sell = (pos >= 20) & (df['close'] < df['close_roll20'])
@@ -243,7 +247,7 @@ class MultiRSIEMAStrategy(BaseStrategy):
             (df['sma_50'] < df['sma_50_shift5'])
         ) | (pos < 55)
 
-        not_oversold = df['close'] > df['recent_low_30'] * 1.002
+        not_oversold = df['close'] > df['recent_low_30'] * 1.005
 
         # Sell score
         sell_conditions = pd.concat([
@@ -267,10 +271,12 @@ class MultiRSIEMAStrategy(BaseStrategy):
             not_oversold.astype(int)
         ], axis=1).sum(axis=1)
 
-        # Generate signals vectorized
+        # Generate signals vectorized with trend filter - Long only for consistency
         signals = pd.Series(['hold'] * n, index=df.index)
-        signals[buy_conditions >= 12] = 'buy'
-        signals[sell_conditions >= 12] = 'sell'
+        signals[(buy_conditions >= 10) & uptrend] = 'buy'
+        
+        # Exit long only on trend reversal
+        signals[downtrend] = 'sell'
 
         df['signal'] = signals
 
