@@ -4,14 +4,16 @@
     "day_trading",
     "golden",
     "multi_rsi_ema",
+    "range_oscillator",
     "swing"
   ],
-  "training_date": "2025-11-06T22:06:17.490101",
+  "training_date": "2025-11-08T14:51:17.719297",
   "model_files": {
     "scalping": "models/scalping_signal.joblib",
     "day_trading": "models/day_trading_signal.joblib",
     "golden": "models/golden_signal.joblib",
     "multi_rsi_ema": "models/multi_rsi_ema_signal.joblib",
+    "range_oscillator": "models/range_oscillator_signal.joblib",
     "swing": "models/swing_signal.joblib"
   }
 }

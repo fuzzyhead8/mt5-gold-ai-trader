@@ -31,6 +31,7 @@ from strategies.day_trading import DayTradingStrategy
 from strategies.golden_scalping import GoldenScalpingStrategy
 from strategies.swing import SwingTradingStrategy
 from strategies.multi_rsi_ema import MultiRSIEMAStrategy
+from strategies.range_oscillator import RangeOscillatorStrategy
 
 class BotTrainer:
     def __init__(self):
@@ -123,6 +124,15 @@ class BotTrainer:
                     row.get('ema_34', row.get('close', 0)),
                     row.get('ema_144', row.get('close', 0)),
                     row.get('ema_21', row.get('close', 0)),
+                ]
+                
+            elif strategy_name == 'range_oscillator':
+                # Range Oscillator-specific features
+                feature_vector = [
+                    row.get('close', 0),
+                    row.get('osc', 0),
+                    row.get('heat_zone', 0),
+                    row.get('wma', row.get('close', 0)),
                 ]
                 
             elif strategy_name == 'swing':
@@ -271,25 +281,28 @@ class BotTrainer:
         # Define strategy configurations
         strategy_configs = {
             'scalping': {
-                'files': ['backtests/XAUUSD_M1_20251106_012337.csv'],
+                'files': ['backtests/XAUUSD_M1_20251107_001549.csv'],
                 'class': ScalpingStrategy
             },
             'day_trading': {
-                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
+                'files': ['backtests/XAUUSD_M15_20251107_001740.csv'],
                 'class': DayTradingStrategy
             },
             'golden': {
-                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
+                'files': ['backtests/XAUUSD_M15_20251107_001740.csv'],
                 'class': GoldenScalpingStrategy
             },
             'multi_rsi_ema': {
-                'files': ['backtests/XAUUSD_M15_20251106_014800.csv'],
+                'files': ['backtests/XAUUSD_M15_20251107_001740.csv'],
                 'class': MultiRSIEMAStrategy
+            },
+            'range_oscillator': {
+                'files': ['backtests/XAUUSD_M15_20251107_001740.csv'],
+                'class': RangeOscillatorStrategy
             },
             'swing': {
                 'files': [
-                    'backtests/XAUUSD_H4_20251104_230518.csv',
-                    'backtests/XAUUSD_H4_20251104_231116.csv'
+                    'backtests/XAUUSD_H4_20251104_230518.csv'
                 ],
                 'class': SwingTradingStrategy
             }

@@ -10,6 +10,7 @@ from strategies.golden_scalping_simplified import GoldenScalpingStrategySimplifi
 from strategies.goldstorm_strategy import GoldStormStrategy
 from strategies.vwap_strategy import VWAPStrategy
 from strategies.multi_rsi_ema import MultiRSIEMAStrategy
+from strategies.range_oscillator import RangeOscillatorStrategy
 import matplotlib.pyplot as plt
 import glob
 from datetime import datetime
@@ -32,7 +33,7 @@ class BacktestRunner:
         self.timeframe = None
         
         # Validate strategy parameter
-        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema']
+        valid_strategies = ['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema', 'range_oscillator']
         if self.strategy_param not in valid_strategies:
             raise ValueError(f"Invalid strategy parameter. Must be one of: {valid_strategies}")
         
@@ -115,6 +116,8 @@ class BacktestRunner:
             return VWAPStrategy(self.symbol)
         elif strategy_type == 'multi_rsi_ema':
             return MultiRSIEMAStrategy(self.symbol)
+        elif strategy_type == 'range_oscillator':
+            return RangeOscillatorStrategy(self.symbol)
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
 
@@ -127,7 +130,8 @@ class BacktestRunner:
             'golden': 'M15',
             'goldstorm': 'M15',
             'vwap': 'M15',
-            'multi_rsi_ema': 'M15'
+            'multi_rsi_ema': 'M15',
+            'range_oscillator': 'M15'
         }
         return mapping.get(strategy.lower(), 'M1')
 
@@ -374,56 +378,72 @@ class BacktestRunner:
         import inspect
         sig = inspect.signature(strategy.generate_signals)
         
-        if 'sentiment' in sig.parameters:
-            # Strategy uses sentiment - pass neutral for backtest
-            result = strategy.generate_signals(self.data.copy(), sentiment='neutral')
-            logging.info(f"⚠️  {strategy_type} uses sentiment - using 'neutral' in backtest")
-        else:
-            result = strategy.generate_signals(self.data.copy())
+        backtest_mode_param = 'backtest_mode' in sig.parameters
+        sentiment_param = 'sentiment' in sig.parameters
         
-        # Ensure 'signal' column exists
-        if 'signal' not in result.columns:
-            raise ValueError(f"{strategy_type} strategy did not return 'signal' column")
-        
-        # Calculate returns (vectorized)
-        result['returns'] = result['close'].pct_change().fillna(0)
-        
-        # Convert signals to positions (IMPROVED with numeric support for 0,1,-1)
-        position = 0
-        positions = []
-        
-        for signal in result['signal']:
-            if pd.isna(signal):
-                positions.append(position)
-                continue
-            
-            if isinstance(signal, (int, float)):
-                new_position = int(signal)
-                if new_position in [0, 1, -1]:
-                    position = new_position
-                else:
-                    # Fallback to string logic if not 0,1,-1
-                    if signal > 0:
-                        position = 1
-                    elif signal < 0:
-                        position = -1
+        if backtest_mode_param:
+            if sentiment_param:
+                result = strategy.generate_signals(self.data.copy(), sentiment='neutral', backtest_mode=True)
+                print(f"⚠️  {strategy_type} uses sentiment - using 'neutral' in backtest")
             else:
-                signal_str = str(signal).lower()
-                if signal_str == 'buy':
-                    position = 1
-                elif signal_str == 'sell':
-                    position = -1
-                # 'hold' keeps current position
+                result = strategy.generate_signals(self.data.copy(), backtest_mode=True)
+            print(f"✅ Using backtest mode simulation for {strategy_type}")
+        else:
+            if sentiment_param:
+                result = strategy.generate_signals(self.data.copy(), sentiment='neutral')
+                print(f"⚠️  {strategy_type} uses sentiment - using 'neutral' in backtest")
+            else:
+                result = strategy.generate_signals(self.data.copy())
+        
+        # Ensure 'signal' and 'close' columns exist
+        if 'signal' not in result.columns or 'close' not in result.columns:
+            raise ValueError(f"{strategy_type} strategy did not return 'signal' and 'close' columns")
+        
+        if 'strategy_returns' in result.columns:
+            # Strategy provided its own returns (backtest mode)
+            if 'position' not in result.columns:
+                raise ValueError(f"{strategy_type} provided strategy_returns but not position")
+            result['cumulative'] = (1 + result['strategy_returns']).cumprod()
+        else:
+            # Standard computation
+            result['returns'] = result['close'].pct_change().fillna(0)
             
-            positions.append(position)
-        
-        result['position'] = positions
-        
-        # Calculate strategy returns (vectorized)
-        result['strategy_returns'] = result['position'].shift(1).fillna(0) * result['returns']
-        
-        # Calculate cumulative returns (vectorized)
-        result['cumulative'] = (1 + result['strategy_returns']).cumprod()
+            # Convert signals to positions (IMPROVED with numeric support for 0,1,-1)
+            position = 0
+            positions = []
+            
+            for signal in result['signal']:
+                if pd.isna(signal):
+                    positions.append(position)
+                    continue
+                
+                if isinstance(signal, (int, float)):
+                    new_position = int(signal)
+                    if new_position in [0, 1, -1]:
+                        position = new_position
+                    else:
+                        # Fallback to string logic if not 0,1,-1
+                        if signal > 0:
+                            position = 1
+                        elif signal < 0:
+                            position = -1
+                else:
+                    signal_str = str(signal).lower()
+                    if signal_str == 'buy':
+                        position = 1
+                    elif signal_str == 'sell':
+                        position = -1
+                    # 'hold' keeps current position
+                
+                positions.append(position)
+            
+            result['position'] = positions
+            
+            # Calculate strategy returns (vectorized)
+            result['strategy_returns'] = result['position'].shift(1).fillna(0) * result['returns']
+            
+            # Calculate cumulative returns (vectorized)
+            result['cumulative'] = (1 + result['strategy_returns']).cumprod()
         
         elapsed = time.time() - start_time
         
@@ -685,7 +705,7 @@ class BacktestRunner:
             print(f"Running ALL strategies on {self.symbol} with respective timeframes\n")
             
             # Run all strategies
-            for strategy in ['scalping', 'daily', 'swing', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema']:
+            for strategy in ['scalping', 'daily', 'swing', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema', 'range_oscillator']:
                 timeframe = self._get_timeframe(strategy)
                 self._load_data(timeframe)
                 result, metrics = self._run_single_strategy(strategy)
@@ -728,7 +748,7 @@ def run_backtest(strategy_param='all', symbol='XAUUSD', chart_style='light'):
     Convenience function to run backtest
     
     Args:
-        strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'
+        strategy_param: 'all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema', 'range_oscillator'
         symbol: Trading symbol (default: 'XAUUSD')
         chart_style: 'light' or 'dark' for TradingView-style themes (default: 'light')
     
@@ -744,7 +764,7 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Fast MT5 Gold AI Trader Backtest Runner')
     parser.add_argument('--strategy', '-s', 
-                       choices=['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema'], 
+                       choices=['all', 'daily', 'swing', 'scalping', 'golden', 'goldstorm', 'vwap', 'multi_rsi_ema', 'range_oscillator'], 
                        default='all', help='Strategy to run (default: all)')
     parser.add_argument('--symbol', default='XAUUSD', help='Trading symbol (default: XAUUSD)')
     parser.add_argument('--style', choices=['light', 'dark'], default='light', 
