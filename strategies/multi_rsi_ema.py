@@ -236,8 +236,8 @@ class MultiRSIEMAStrategy(BaseStrategy):
 
         # Generate signals vectorized
         conditions = pd.DataFrame({
-            'buy': df['buy_score'] >= 4,
-            'sell': df['sell_score'] >= 4
+            'buy': df['buy_score'] >= 7,
+            'sell': df['sell_score'] >= 7
         })
         df['signal'] = 'hold'
         df.loc[conditions['buy'], 'signal'] = 'buy'
