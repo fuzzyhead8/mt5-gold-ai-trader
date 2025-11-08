@@ -9,6 +9,7 @@ import MetaTrader5 as mt5
 from datetime import datetime
 import logging
 from strategies.base_strategy import BaseStrategy
+from utils.tp_magic import TPMagic, TPMagicMode
 
 class VWAPStrategy(BaseStrategy):
     def __init__(self, symbol="XAUUSD"):
@@ -36,6 +37,13 @@ class VWAPStrategy(BaseStrategy):
         self.tp2_atr_mult = 1.6
         self.trailing_atr_mult = 0.6
         self.min_stop_usd = 6.0
+
+        # TPMagic parameters for VWAP (M15 timeframe)
+        self.tp1_pips = 25
+        self.tp2_pips = 37.5
+        self.tp3_pips = 50
+        self.sl_pips = 30
+        self.tp_magic = None
 
         
     def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -230,19 +238,33 @@ class VWAPStrategy(BaseStrategy):
         
         return 'hold'
     
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def generate_signals(self, df: pd.DataFrame, sentiment: str = None, backtest_mode: bool = False) -> pd.DataFrame:
         """
         Generate trading signals for the given dataframe
         Vectorized version for performance optimization
+        If backtest_mode, use TPMagic for multi-TP simulation.
         
         Args:
             df: DataFrame with OHLCV data
+            sentiment: Market sentiment (for compatibility)
+            backtest_mode: If True, return position and strategy_returns
             
         Returns:
             DataFrame with signals and indicators
         """
         result = df.copy()
         
+        if backtest_mode:
+            # Ensure required columns for backtest
+            required_cols = ['open', 'high', 'low', 'close', 'tick_volume']
+            for col in required_cols:
+                if col not in result.columns:
+                    if col == 'tick_volume':
+                        result[col] = 100
+                    else:
+                        result[col] = result['close']
+            result['returns'] = result['close'].pct_change().fillna(0)
+
         # Calculate indicators (vectorized)
         result['atr'] = self.calculate_atr(result, self.atr_period)
         result['rsi'] = self.calculate_rsi(result, self.rsi_period)
@@ -358,6 +380,43 @@ class VWAPStrategy(BaseStrategy):
                      'range_low_3', 'avg_volume_3']
         result.drop(columns=[col for col in temp_cols if col in result.columns], inplace=True, errors='ignore')
         
+        if backtest_mode:
+            # Backtest simulation with TPMagic
+            result['position'] = 0.0
+            result['strategy_returns'] = 0.0
+            pip_size = 0.1
+            tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=pip_size,
+                mode=TPMagicMode.BACKTEST, initial_lot=0.01,
+                logger=self.logger
+            )
+
+            for i in range(len(result)):
+                if i == 0:
+                    continue
+
+                high_i = result['high'].iloc[i]
+                low_i = result['low'].iloc[i]
+                close_i = result['close'].iloc[i]
+                signal_i = result['signal'].iloc[i]
+                asset_return = (result['close'].iloc[i] - result['close'].iloc[i-1]) / result['close'].iloc[i-1] if i > 0 else 0.0
+                prev_close = result['close'].iloc[i-1]
+
+                if not tp_magic.is_open:
+                    if signal_i == 'buy':
+                        tp_magic.open_position(1, prev_close)
+                    elif signal_i == 'sell':
+                        tp_magic.open_position(-1, prev_close)
+
+                if tp_magic.is_open:
+                    update_result = tp_magic.update(high_i, low_i, close_i, asset_return)
+                    result.loc[result.index[i], 'strategy_returns'] = update_result['strategy_returns']
+                    result.loc[result.index[i], 'position'] = update_result['position']
+                else:
+                    result.loc[result.index[i], 'strategy_returns'] = 0.0
+                    result.loc[result.index[i], 'position'] = 0.0
+
         self.logger.info(f"Generated {len(result)} signals for {self.symbol}")
         return result
     
@@ -395,87 +454,89 @@ class VWAPStrategy(BaseStrategy):
 
     def execute_strategy(self, df: pd.DataFrame, sentiment: str, balance: float) -> dict:
         """
-        Execute the VWAP strategy: generate signals and place trades if conditions met.
-        
-        Args:
-            df: Market data DataFrame
-            sentiment: Current market sentiment ('bullish', 'bearish', 'neutral')
-            balance: Current account balance
-            
-        Returns:
-            dict: Execution result with status and details
+        Execute the VWAP strategy using TPMagic for consistent multi-TP management.
         """
-        # Generate signals
+        # Generate signals (normal mode)
         signals_df = self.generate_signals(df)
         if len(signals_df) == 0:
             self.logger.info("No data available for signal generation")
             return {"status": "no_data", "signal": "hold"}
-        
+
         latest_signal = signals_df['signal'].iloc[-1]
         if latest_signal not in ['buy', 'sell']:
             self.logger.info(f"No actionable signal generated: {latest_signal}")
-            return {"status": "no_signal", "signal": latest_signal}
-        
+            return self._manage_existing_position(df, sentiment)
+
         # Validate signal with sentiment
         if not self.validate_signal_with_sentiment(latest_signal, sentiment):
             self.logger.info(f"Signal '{latest_signal}' rejected due to sentiment '{sentiment}'")
-            return {"status": "sentiment_rejected", "signal": latest_signal}
-        
+            return self._manage_existing_position(df, sentiment)
+
         # Get current market price
         current_price = self.get_market_price(latest_signal)
         if current_price is None:
             self.logger.error("Failed to get current market price")
             return {"status": "no_price", "signal": latest_signal}
-        
-        # Get symbol info for point and digits
-        symbol_info = mt5.symbol_info(self.symbol)
-        if not symbol_info:
-            self.logger.error(f"Failed to get symbol info for {self.symbol}")
-            return {"status": "no_symbol_info", "signal": latest_signal}
-        
-        digits = symbol_info.digits
-        
-        # Get ATR for dynamic SL/TP
-        atr = signals_df['atr'].iloc[-1]
-        if pd.isna(atr) or atr == 0:
-            atr = 5.0  # Default ATR value for XAUUSD
-        
-        # Calculate SL and TP using ATR multiples (50 pips equivalent approx)
-        sl_distance = atr * self.stop_loss_atr_mult
-        tp_distance = atr * (self.tp1_atr_mult + self.tp2_atr_mult) / 2  # Average TP
-        
-        if latest_signal == 'buy':
-            stop_loss = round(current_price - sl_distance, digits)
-            take_profit = round(current_price + tp_distance, digits)
-        else:  # sell
-            stop_loss = round(current_price + sl_distance, digits)
-            take_profit = round(current_price - tp_distance, digits)
-        
-        # Calculate position size based on risk (2% of balance)
-        lot_size = self.calculate_position_size(balance, current_price, stop_loss, risk_percent=2.0)
-        
-        # Validate stop distances
-        if not self.validate_stop_distances(current_price, stop_loss, take_profit):
-            self.logger.warning("Stop loss/take profit distances invalid")
-            return {"status": "invalid_stops", "signal": latest_signal}
-        
-        # Execute the trade
-        result = self.execute_trade(
-            latest_signal, sentiment, current_price, 
-            stop_loss, take_profit, lot_size, "VWAP"
-        )
-        
-        if result:
-            self.logger.info(f"Trade executed successfully: {latest_signal} at {current_price}, lot: {lot_size}")
-            return {
-                "status": "executed", 
-                "signal": latest_signal, 
-                "ticket": result.order,
-                "price": current_price,
-                "sl": stop_loss,
-                "tp": take_profit,
-                "lot_size": lot_size
-            }
+
+        # Check if we have an existing TPMagic position
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            # No position, open new one
+            direction = 1 if latest_signal == 'buy' else -1
+            # Calculate position size using base SL
+            base_sl = current_price - self.sl_pips * 0.1 * direction  # pip_size=0.1
+            lot_size = self.calculate_position_size(balance, current_price, base_sl, risk_percent=2.0)
+
+            self.tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=0.1,
+                mode=TPMagicMode.LIVE, initial_lot=lot_size,
+                logger=self.logger
+            )
+
+            if self.tp_magic.open_position(direction, current_price, lot_size):
+                self.logger.info(f"New TPMagic position opened: {latest_signal} {lot_size} lots at {current_price}")
+                return {
+                    "status": "executed",
+                    "signal": latest_signal,
+                    "price": current_price,
+                    "lot_size": lot_size,
+                    "tp_magic_state": self.tp_magic.get_state()
+                }
+            else:
+                self.tp_magic = None
+                return {"status": "execution_failed", "signal": latest_signal}
         else:
-            self.logger.error(f"Failed to execute {latest_signal} trade")
-            return {"status": "execution_failed", "signal": latest_signal}
+            # Position exists, manage it
+            return self._manage_existing_position(df, sentiment)
+
+    def _manage_existing_position(self, df: pd.DataFrame, sentiment: str) -> dict:
+        """Manage existing TPMagic position"""
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            return {"status": "no_position", "signal": "hold"}
+
+        # Get latest bar data
+        latest = df.iloc[-1]
+        high = latest['high']
+        low = latest['low']
+        close = latest['close']
+
+        # Update TPMagic
+        result = self.tp_magic.update(high, low, close)
+        actions = result['actions']
+        current_sl = result['current_sl']
+
+        executed_actions = []
+        for action in actions:
+            if action['type'] in ['partial_close', 'close_sl', 'close_retrace', 'close_all']:
+                self.logger.info(f"Executed action: {action}")
+                executed_actions.append(action)
+
+        state = self.tp_magic.get_state()
+        self.logger.info(f"Position managed. Stage: {state['stage']}, Remaining lot: {state['remaining_lot']}, SL: {current_sl}")
+
+        return {
+            "status": "managed",
+            "signal": "hold",
+            "actions": executed_actions,
+            "tp_magic_state": state
+        }

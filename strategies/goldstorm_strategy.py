@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import logging
 from .goldstorm import BotConfig, VolatilityAnalyzer, MomentumAnalyzer
 from .base_strategy import BaseStrategy
+from utils.tp_magic import TPMagic, TPMagicMode
 
 class GoldStormStrategy(BaseStrategy):
     """
@@ -35,6 +36,12 @@ class GoldStormStrategy(BaseStrategy):
         self.tp_pips = 300  # Take profit in pips
         self.min_distance_pips = 50.0  # Minimum distance for stops
         self.strategy_name = "goldstorm"
+
+        # TPMagic parameters for GoldStorm (M15, larger targets)
+        self.tp1_pips = 100
+        self.tp2_pips = 150
+        self.tp3_pips = 200
+        self.tp_magic = None
     
     def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         """Calculate RSI from DataFrame"""
@@ -97,19 +104,30 @@ class GoldStormStrategy(BaseStrategy):
         else:
             return "NEUTRAL"
     
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def generate_signals(self, df: pd.DataFrame, sentiment: str = None, backtest_mode: bool = False) -> pd.DataFrame:
         """
         Generate trading signals based on GoldStorm strategy logic
         Vectorized version for performance optimization
+        If backtest_mode, use TPMagic for multi-TP simulation.
         
         Args:
             df: DataFrame with OHLCV data
+            sentiment: Market sentiment (for backtest compatibility)
+            backtest_mode: If True, return position and strategy_returns
             
         Returns:
-            DataFrame with additional columns: signal, momentum, volatility_ratio, atr
+            DataFrame with additional columns: signal, momentum, volatility_ratio, atr, [position, strategy_returns if backtest]
         """
         df = df.copy()
         
+        if backtest_mode:
+            # Ensure required columns for backtest
+            required_cols = ['open', 'high', 'low', 'close']
+            for col in required_cols:
+                if col not in df.columns:
+                    df[col] = df['close']
+            df['returns'] = df['close'].pct_change().fillna(0)
+
         # Calculate technical indicators (vectorized)
         df['rsi'] = self.calculate_rsi(df, self.config.momentum_period)
         df['atr'] = self.calculate_atr(df, self.config.volatility_period)
@@ -122,6 +140,10 @@ class GoldStormStrategy(BaseStrategy):
         df['stop_loss'] = np.nan
         df['take_profit'] = np.nan
         
+        if backtest_mode:
+            df['position'] = 0.0
+            df['strategy_returns'] = 0.0
+
         # Minimum data requirement
         min_data_idx = max(self.config.volatility_period, self.config.momentum_period, 50)
         valid_mask = pd.Series([i >= min_data_idx for i in range(len(df))], index=df.index)
@@ -129,8 +151,7 @@ class GoldStormStrategy(BaseStrategy):
         # Volatility condition (vectorized)
         high_volatility = df['volatility_ratio'] > self.config.min_volatility_threshold
         
-        # Vectorized momentum logic (inline get_momentum_signal)
-        # Price change over last 5 periods
+        # Vectorized momentum logic
         df['price_change_5'] = df['close'] - df['close'].shift(5)
         
         # Momentum conditions
@@ -139,18 +160,16 @@ class GoldStormStrategy(BaseStrategy):
         bullish = (df['rsi'] > 50) & (df['price_change_5'] > 0)
         bearish = (df['rsi'] < 50) & (df['price_change_5'] < 0)
         
-        # Assign momentum (priority: strong > normal)
+        # Assign momentum
         df.loc[strong_bullish, 'momentum'] = 'STRONG_BULLISH'
         df.loc[strong_bearish, 'momentum'] = 'STRONG_BEARISH'
         df.loc[(~strong_bullish) & bullish, 'momentum'] = 'BULLISH'
         df.loc[(~strong_bearish) & bearish, 'momentum'] = 'BEARISH'
         
-        # Generate signals (vectorized)
-        # Bullish signals
+        # Generate signals
         bullish_signals = df['momentum'].isin(['STRONG_BULLISH', 'BULLISH']) & (df['rsi'] < 80)
         df.loc[valid_mask & high_volatility & bullish_signals, 'signal'] = 'buy'
         
-        # Bearish signals
         bearish_signals = df['momentum'].isin(['STRONG_BEARISH', 'BEARISH']) & (df['rsi'] > 20)
         df.loc[valid_mask & high_volatility & bearish_signals, 'signal'] = 'sell'
         
@@ -171,69 +190,131 @@ class GoldStormStrategy(BaseStrategy):
         if 'price_change_5' in df.columns:
             df.drop('price_change_5', axis=1, inplace=True)
         
+        if backtest_mode:
+            # Backtest simulation with TPMagic
+            pip_size = 0.1
+            tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=pip_size,
+                mode=TPMagicMode.BACKTEST, initial_lot=0.01,
+                logger=self.logger
+            )
+
+            for i in range(len(df)):
+                if i == 0:
+                    continue
+
+                high_i = df['high'].iloc[i]
+                low_i = df['low'].iloc[i]
+                close_i = df['close'].iloc[i]
+                signal_i = df['signal'].iloc[i]
+                asset_return = df['returns'].iloc[i]
+                prev_close = df['close'].iloc[i-1]
+
+                if not tp_magic.is_open:
+                    if signal_i == 'buy':
+                        tp_magic.open_position(1, prev_close)
+                    elif signal_i == 'sell':
+                        tp_magic.open_position(-1, prev_close)
+
+                if tp_magic.is_open:
+                    update_result = tp_magic.update(high_i, low_i, close_i, asset_return)
+                    df.loc[df.index[i], 'strategy_returns'] = update_result['strategy_returns']
+                    df.loc[df.index[i], 'position'] = update_result['position']
+                else:
+                    df.loc[df.index[i], 'strategy_returns'] = 0.0
+                    df.loc[df.index[i], 'position'] = 0.0
+
         return df
     
-    def execute_strategy(self, df: pd.DataFrame, sentiment: str, 
-                        account_balance: float) -> bool:
+    def execute_strategy(self, df: pd.DataFrame, sentiment: str, balance: float) -> dict:
         """
-        Execute the GoldStorm strategy with complete trade management
-        
-        Args:
-            df: OHLCV data DataFrame
-            sentiment: Market sentiment ('bullish', 'bearish', 'neutral')
-            account_balance: Account balance for position sizing
-            
-        Returns:
-            bool: True if trade was executed, False otherwise
+        Execute the GoldStorm strategy using TPMagic for consistent multi-TP management.
         """
-        # Generate signals
+        # Generate signals (normal mode)
         signals_df = self.generate_signals(df)
+        if len(signals_df) == 0:
+            self.logger.info("No data available for signal generation")
+            return {"status": "no_data", "signal": "hold"}
+
         latest_signal = signals_df['signal'].iloc[-1]
-        
         if latest_signal not in ['buy', 'sell']:
-            return False
-        
-        self.logger.info(f"GoldStorm signal: {latest_signal}")
-        
+            self.logger.info(f"No actionable signal generated: {latest_signal}")
+            return self._manage_existing_position(df, sentiment)
+
+        # Validate signal with sentiment
+        if not self.validate_signal_with_sentiment(latest_signal, sentiment):
+            self.logger.info(f"Signal '{latest_signal}' rejected due to sentiment '{sentiment}'")
+            return self._manage_existing_position(df, sentiment)
+
         # Get current market price
-        entry_price = self.get_market_price(latest_signal)
-        if not entry_price:
-            return False
-        
-        # Calculate stop loss and take profit
-        try:
-            stop_loss, take_profit = self.calculate_stop_take_levels(
-                latest_signal, entry_price, self.sl_pips, self.tp_pips
+        current_price = self.get_market_price(latest_signal)
+        if current_price is None:
+            self.logger.error("Failed to get current market price")
+            return {"status": "no_price", "signal": latest_signal}
+
+        # Check if we have an existing TPMagic position
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            # No position, open new one
+            direction = 1 if latest_signal == 'buy' else -1
+            # Calculate position size using base SL
+            base_sl = current_price - self.sl_pips * 0.1 * direction  # pip_size=0.1
+            lot_size = self.calculate_position_size(balance, current_price, base_sl, risk_percent=2.0)
+
+            self.tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=0.1,
+                mode=TPMagicMode.LIVE, initial_lot=lot_size,
+                logger=self.logger
             )
-        except ValueError as e:
-            self.logger.error(f"Failed to calculate stop levels: {e}")
-            return False
-        
-        # Validate stop distances
-        if not self.validate_stop_distances(entry_price, stop_loss, take_profit):
-            return False
-        
-        # Calculate position size
-        lot_size = self.calculate_position_size(
-            account_balance, entry_price, stop_loss, self.config.risk_percentage
-        )
-        
-        self.logger.info(f"Trade levels - Price: {entry_price}, SL: {stop_loss} "
-                        f"({abs(stop_loss-entry_price)*10000:.1f} pips), "
-                        f"TP: {take_profit} ({abs(take_profit-entry_price)*10000:.1f} pips)")
-        
-        # Execute trade with validation
-        result = self.execute_trade(
-            signal=latest_signal,
-            sentiment=sentiment, 
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            lot_size=lot_size,
-            strategy_name=self.strategy_name
-        )
-        
-        return result is not None
+
+            if self.tp_magic.open_position(direction, current_price, lot_size):
+                self.logger.info(f"New TPMagic position opened: {latest_signal} {lot_size} lots at {current_price}")
+                return {
+                    "status": "executed",
+                    "signal": latest_signal,
+                    "price": current_price,
+                    "lot_size": lot_size,
+                    "tp_magic_state": self.tp_magic.get_state()
+                }
+            else:
+                self.tp_magic = None
+                return {"status": "execution_failed", "signal": latest_signal}
+        else:
+            # Position exists, manage it
+            return self._manage_existing_position(df, sentiment)
+
+    def _manage_existing_position(self, df: pd.DataFrame, sentiment: str) -> dict:
+        """Manage existing TPMagic position"""
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            return {"status": "no_position", "signal": "hold"}
+
+        # Get latest bar data
+        latest = df.iloc[-1]
+        high = latest['high']
+        low = latest['low']
+        close = latest['close']
+
+        # Update TPMagic
+        result = self.tp_magic.update(high, low, close)
+        actions = result['actions']
+        current_sl = result['current_sl']
+
+        executed_actions = []
+        for action in actions:
+            if action['type'] in ['partial_close', 'close_sl', 'close_retrace', 'close_all']:
+                self.logger.info(f"Executed action: {action}")
+                executed_actions.append(action)
+
+        state = self.tp_magic.get_state()
+        self.logger.info(f"Position managed. Stage: {state['stage']}, Remaining lot: {state['remaining_lot']}, SL: {current_sl}")
+
+        return {
+            "status": "managed",
+            "signal": "hold",
+            "actions": executed_actions,
+            "tp_magic_state": state
+        }
 
     def get_strategy_config(self) -> dict:
         """Get strategy configuration"""

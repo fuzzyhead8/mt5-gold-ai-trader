@@ -2,7 +2,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 from strategies.base_strategy import BaseStrategy
-from typing import Dict
+from utils.tp_magic import TPMagic, TPMagicMode
 
 class RangeOscillatorStrategy(BaseStrategy):
     def __init__(self, symbol: str = "XAUUSD"):
@@ -24,6 +24,9 @@ class RangeOscillatorStrategy(BaseStrategy):
         self.lot_size = 0.01
         self.enable_zone_lock = False  # Simplified, disabled for base integration
         self.zone_lock_pips = 100
+
+        # TPMagic for consistent multi-TP handling
+        self.tp_magic = None
 
     def calculate_atr_proxy(self, df: pd.DataFrame) -> pd.Series:
         """Calculate simple ATR proxy: rolling mean of (high - low)"""
@@ -104,7 +107,7 @@ class RangeOscillatorStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame, sentiment: str = None, backtest_mode: bool = False) -> pd.DataFrame:
         """
         Generate trading signals based on Range Oscillator.
-        If backtest_mode, simulate detailed returns with multi-TP logic.
+        If backtest_mode, simulate detailed returns with multi-TP logic using TPMagic.
         """
         if len(df) < max(self.length, 200, self.heat_lookback):
             df['signal'] = 'hold'
@@ -170,15 +173,16 @@ class RangeOscillatorStrategy(BaseStrategy):
             return_cols = ['close', 'signal', 'osc', 'heat_zone', 'wma']
             return df[return_cols].copy()
         else:
-            # Backtest mode: simulate multi-TP logic
+            # Backtest mode: use TPMagic for consistent multi-TP simulation
             df['position'] = 0.0
             df['strategy_returns'] = 0.0
-            exposure = 0.0
-            direction = 0
-            entry_price = 0.0
-            sl = 0.0
-            stage = 0
             pip_size = 0.1  # For XAUUSD
+            tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=pip_size,
+                mode=TPMagicMode.BACKTEST, initial_lot=self.lot_size,
+                logger=self.logger
+            )
 
             for i in range(len(df)):
                 if i == 0:
@@ -186,111 +190,45 @@ class RangeOscillatorStrategy(BaseStrategy):
                     df.loc[df.index[i], 'strategy_returns'] = 0.0
                     continue
 
-                asset_return = df['returns'].iloc[i]
                 high_i = df['high'].iloc[i]
                 low_i = df['low'].iloc[i]
+                close_i = df['close'].iloc[i]
                 heat_zone_i = heat_zone.iloc[i]
-                strategy_return = 0.0
+                asset_return = df['returns'].iloc[i]
                 signal = 'hold'
                 prev_close = df['close'].iloc[i-1]
 
-                if exposure == 0.0:
+                # Open new position if no exposure and signal
+                if not tp_magic.is_open:
                     if heat_zone_i > 0:
                         signal = 'buy'
                         direction = 1
-                        entry_price = prev_close
-                        sl = entry_price - self.sl_pips * pip_size * direction
-                        exposure = 1.0
-                        stage = 0
+                        if tp_magic.open_position(direction, prev_close):
+                            pass  # Opened
+                        else:
+                            signal = 'hold'
                     elif heat_zone_i < 0:
                         signal = 'sell'
                         direction = -1
-                        entry_price = prev_close
-                        sl = entry_price - self.sl_pips * pip_size * direction
-                        exposure = 1.0
-                        stage = 0
+                        if tp_magic.open_position(direction, prev_close):
+                            pass  # Opened
+                        else:
+                            signal = 'hold'
 
-                if exposure > 0.0:
-                    # Define TP prices
-                    tp1_price = entry_price + self.tp1_pips * pip_size * direction
-                    tp2_price = entry_price + self.tp2_pips * pip_size * direction
-                    tp3_price = entry_price + self.tp3_pips * pip_size * direction
+                # Update position if open
+                if tp_magic.is_open:
+                    update_result = tp_magic.update(high_i, low_i, close_i, asset_return)
+                    df.loc[df.index[i], 'strategy_returns'] = update_result['strategy_returns']
+                    df.loc[df.index[i], 'position'] = update_result['position']
+                else:
+                    df.loc[df.index[i], 'strategy_returns'] = 0.0
+                    df.loc[df.index[i], 'position'] = 0.0
 
-                    # Check hits
-                    hit_tp3 = (high_i >= tp3_price if direction == 1 else low_i <= tp3_price)
-                    hit_tp2 = (high_i >= tp2_price if direction == 1 else low_i <= tp2_price)
-                    hit_tp1 = (high_i >= tp1_price if direction == 1 else low_i <= tp1_price)
-                    hit_sl = (low_i <= sl if direction == 1 else high_i >= sl)
-
-                    realized_pnl_pct = 0.0
-                    closed_this_bar = False
-
-                    if hit_tp3:
-                        # Close all remaining at TP3
-                        pnl_pct = direction * (tp3_price - entry_price) / entry_price * exposure
-                        realized_pnl_pct += pnl_pct
-                        exposure = 0.0
-                        direction = 0
-                        stage = 0
-                        closed_this_bar = True
-                    elif hit_tp2:
-                        if stage == 1:
-                            # Normal partial close at TP2
-                            close_size = 1/3
-                            pnl_pct = direction * (tp2_price - entry_price) / entry_price * close_size
-                            realized_pnl_pct += pnl_pct
-                            exposure -= close_size
-                            dist2 = self.tp2_pips * pip_size
-                            sl = tp2_price - direction * (0.2 * dist2)
-                            stage = 2
-                            closed_this_bar = True
-                        elif stage == 0:
-                            # Hit TP2 directly, close two portions
-                            close_size1 = 1/3
-                            tp1_price_local = entry_price + self.tp1_pips * pip_size * direction
-                            pnl1 = direction * (tp1_price_local - entry_price) / entry_price * close_size1
-                            close_size2 = 1/3
-                            pnl2 = direction * (tp2_price - entry_price) / entry_price * close_size2
-                            realized_pnl_pct += pnl1 + pnl2
-                            exposure -= (close_size1 + close_size2)
-                            dist2 = self.tp2_pips * pip_size
-                            sl = tp2_price - direction * (0.2 * dist2)
-                            stage = 2
-                            closed_this_bar = True
-                    elif hit_tp1 and stage == 0:
-                        # Partial close at TP1
-                        close_size = 1/3
-                        pnl_pct = direction * (tp1_price - entry_price) / entry_price * close_size
-                        realized_pnl_pct += pnl_pct
-                        exposure -= close_size
-                        dist1 = self.tp1_pips * pip_size
-                        sl = tp1_price - direction * (0.2 * dist1)
-                        stage = 1
-                        closed_this_bar = True
-
-                    if hit_sl and exposure > 0.0 and not closed_this_bar:
-                        pnl_pct = direction * (sl - entry_price) / entry_price * exposure
-                        realized_pnl_pct += pnl_pct
-                        exposure = 0.0
-                        direction = 0
-                        stage = 0
-                        closed_this_bar = True
-
-                    # Unrealized return for remaining exposure
-                    if exposure > 0.0:
-                        unrealized = direction * asset_return * exposure
-                    else:
-                        unrealized = 0.0
-
-                    strategy_return = unrealized + realized_pnl_pct
-
-                df.loc[df.index[i], 'strategy_returns'] = strategy_return
-                df.loc[df.index[i], 'position'] = direction * exposure if exposure > 0.0 else 0.0
                 df.loc[df.index[i], 'signal'] = signal
 
             return df[['close', 'signal', 'position', 'strategy_returns', 'osc', 'heat_zone', 'wma']]
 
-    def get_strategy_config(self) -> Dict:
+    def get_strategy_config(self) -> dict:
         """Return strategy configuration parameters"""
         return {
             "strategy_name": "Range Oscillator Strategy",
@@ -314,11 +252,11 @@ class RangeOscillatorStrategy(BaseStrategy):
             }
         }
 
-    def execute_strategy(self, df: pd.DataFrame, sentiment: str, balance: float) -> Dict:
+    def execute_strategy(self, df: pd.DataFrame, sentiment: str, balance: float) -> dict:
         """
-        Execute the Range Oscillator strategy: generate signals and place trades if conditions met.
+        Execute the Range Oscillator strategy using TPMagic for consistent multi-TP management.
         """
-        # Generate signals
+        # Generate signals (normal mode, no backtest)
         signals_df = self.generate_signals(df)
         if len(signals_df) == 0:
             self.logger.info("No data available for signal generation")
@@ -327,12 +265,13 @@ class RangeOscillatorStrategy(BaseStrategy):
         latest_signal = signals_df['signal'].iloc[-1]
         if latest_signal not in ['buy', 'sell']:
             self.logger.info(f"No actionable signal generated: {latest_signal}")
-            return {"status": "no_signal", "signal": latest_signal}
+            # Still check for position management
+            return self._manage_existing_position(df, sentiment)
 
         # Validate signal with sentiment
         if not self.validate_signal_with_sentiment(latest_signal, sentiment):
             self.logger.info(f"Signal '{latest_signal}' rejected due to sentiment '{sentiment}'")
-            return {"status": "sentiment_rejected", "signal": latest_signal}
+            return self._manage_existing_position(df, sentiment)
 
         # Get current market price
         current_price = self.get_market_price(latest_signal)
@@ -340,36 +279,68 @@ class RangeOscillatorStrategy(BaseStrategy):
             self.logger.error("Failed to get current market price")
             return {"status": "no_price", "signal": latest_signal}
 
-        # Calculate SL and TP using base method
-        stop_loss, take_profit = self.calculate_stop_take_levels(
-            latest_signal, current_price, self.sl_pips, self.tp_pips
-        )
+        # Check if we have an existing TPMagic position
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            # No position, open new one
+            direction = 1 if latest_signal == 'buy' else -1
+            # Calculate position size (use base SL for risk calc)
+            base_sl = current_price - self.sl_pips * 0.1 * direction  # pip_size=0.1
+            lot_size = self.calculate_position_size(balance, current_price, base_sl, risk_percent=2.0)
 
-        # Calculate position size
-        lot_size = self.calculate_position_size(balance, current_price, stop_loss, risk_percent=2.0)
+            self.tp_magic = TPMagic(
+                tp1_pips=self.tp1_pips, tp2_pips=self.tp2_pips, tp3_pips=self.tp3_pips,
+                sl_pips=self.sl_pips, symbol=self.symbol, pip_size=0.1,
+                mode=TPMagicMode.LIVE, initial_lot=lot_size,
+                logger=self.logger
+            )
 
-        # Validate stop distances
-        if not self.validate_stop_distances(current_price, stop_loss, take_profit):
-            self.logger.warning("Stop loss/take profit distances invalid")
-            return {"status": "invalid_stops", "signal": latest_signal}
-
-        # Execute the trade
-        result = self.execute_trade(
-            latest_signal, sentiment, current_price,
-            stop_loss, take_profit, lot_size, "Range Oscillator"
-        )
-
-        if result:
-            self.logger.info(f"Trade executed successfully: {latest_signal} at {current_price}, lot: {lot_size}")
-            return {
-                "status": "executed",
-                "signal": latest_signal,
-                "ticket": result.order,
-                "price": current_price,
-                "sl": stop_loss,
-                "tp": take_profit,
-                "lot_size": lot_size
-            }
+            if self.tp_magic.open_position(direction, current_price, lot_size):
+                self.logger.info(f"New TPMagic position opened: {latest_signal} {lot_size} lots at {current_price}")
+                return {
+                    "status": "executed",
+                    "signal": latest_signal,
+                    "price": current_price,
+                    "lot_size": lot_size,
+                    "tp_magic_state": self.tp_magic.get_state()
+                }
+            else:
+                self.tp_magic = None
+                return {"status": "execution_failed", "signal": latest_signal}
         else:
-            self.logger.error(f"Failed to execute {latest_signal} trade")
-            return {"status": "execution_failed", "signal": latest_signal}
+            # Position exists, just manage it
+            return self._manage_existing_position(df, sentiment)
+
+    def _manage_existing_position(self, df: pd.DataFrame, sentiment: str) -> dict:
+        """Manage existing TPMagic position"""
+        if self.tp_magic is None or not self.tp_magic.is_open:
+            return {"status": "no_position", "signal": "hold"}
+
+        # Get latest bar data
+        latest = df.iloc[-1]
+        high = latest['high']
+        low = latest['low']
+        close = latest['close']
+
+        # Update TPMagic
+        result = self.tp_magic.update(high, low, close)
+        actions = result['actions']
+        current_sl = result['current_sl']
+
+        executed_actions = []
+        for action in actions:
+            if action['type'] in ['partial_close', 'close_sl', 'close_retrace', 'close_all']:
+                # Execute the close (TPMagic already handles execution in LIVE mode)
+                # But log it
+                self.logger.info(f"Executed action: {action}")
+                executed_actions.append(action)
+
+        # Update SL on position if needed (TPMagic manages, but verify)
+        state = self.tp_magic.get_state()
+        self.logger.info(f"Position managed. Stage: {state['stage']}, Remaining lot: {state['remaining_lot']}, SL: {current_sl}")
+
+        return {
+            "status": "managed",
+            "signal": "hold",
+            "actions": executed_actions,
+            "tp_magic_state": state
+        }
