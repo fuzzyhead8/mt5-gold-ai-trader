@@ -19,7 +19,12 @@ import seaborn as sns
 
 # Local imports
 from main import NebulaAssistant, TradeSignal, ShieldProtocol
+from mt5_connector import MT5Connector
 from config import get_config
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -65,11 +70,12 @@ class BacktestResult:
 class AIBacktester:
     """AI-powered backtesting engine"""
 
-    def __init__(self, symbol: str = 'XAUUSD', timeframe: str = 'H1'):
+    def __init__(self, symbol: str = 'XAUUSD', timeframe: str = 'M15'):
         self.symbol = symbol
         self.timeframe = timeframe
 
         # Initialize components
+        self.mt5_connector = MT5Connector()
         self.nebula_assistant = NebulaAssistant()
         self.shield_protocol = ShieldProtocol()
         self.config = get_config()
@@ -88,37 +94,41 @@ class AIBacktester:
 
         logger.info(f"AI Backtester initialized for {symbol} {timeframe}")
 
-    async def load_historical_data(self, csv_path: str) -> pd.DataFrame:
-        """Load historical data from CSV file"""
+    async def load_historical_data(self) -> pd.DataFrame:
+        """Download historical data from MT5"""
         try:
-            # Read CSV with proper column names
-            df = pd.read_csv(csv_path)
+            # Connect to MT5
+            if not await self.mt5_connector.connect():
+                raise Exception("Failed to connect to MT5")
 
-            # Clean column names (remove leading comma/space issues)
-            df.columns = df.columns.str.strip().str.lstrip(',')
+            # Download 1000 bars of historical data
+            logger.info(f"Downloading 1000 bars of {self.symbol} {self.timeframe} data from MT5...")
+            df = await self.mt5_connector.get_historical_data(
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                bars=1000
+            )
+
+            if df is None or len(df) == 0:
+                raise Exception(f"Failed to download historical data for {self.symbol} {self.timeframe}")
 
             # Ensure we have the required columns
-            required_cols = ['time', 'open', 'high', 'low', 'close', 'tick_volume']
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in df.columns for col in required_cols):
                 raise ValueError(f"Missing required columns. Found: {df.columns.tolist()}")
 
-            # Convert time column to datetime
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-
-            # Sort by time
+            # Sort by time index
             df.sort_index(inplace=True)
 
-            # Add volume column if missing
-            if 'volume' not in df.columns:
-                df['volume'] = df['tick_volume']
-
-            logger.info(f"Loaded {len(df)} bars of historical data")
+            logger.info(f"Downloaded {len(df)} bars of historical data from MT5")
             return df
 
         except Exception as e:
-            logger.error(f"Failed to load historical data: {e}")
+            logger.error(f"Failed to download historical data: {e}")
             raise
+        finally:
+            # Disconnect from MT5
+            await self.mt5_connector.disconnect()
 
     async def run_backtest(self, historical_data: pd.DataFrame,
                           start_date: str = None, end_date: str = None) -> BacktestResult:
@@ -806,21 +816,18 @@ class AIBacktester:
 
         return report
 
-async def main():
+async def main(timeframe: str = 'M15'):
     """Main function to run AI backtest"""
-    # Initialize backtester
-    backtester = AIBacktester(symbol='XAUUSD', timeframe='H1')
+    # Initialize backtester with specified timeframe
+    backtester = AIBacktester(symbol='XAUUSD', timeframe=timeframe)
 
-    # Load historical data
-    data_path = '../backtests/XAUUSD_H1_20251105_211938.csv'
-    historical_data = await backtester.load_historical_data(data_path)
+    print(f"Testing {timeframe} timeframe - downloading historical data from MT5...")
+
+    # Download historical data from MT5
+    historical_data = await backtester.load_historical_data()
 
     # Run backtest
-    result = await backtester.run_backtest(
-        historical_data,
-        start_date='2025-09-15',  # Start from a reasonable date
-        end_date='2025-11-05'    # End date
-    )
+    result = await backtester.run_backtest(historical_data)
 
     # Generate and print report
     report = backtester.generate_report(result)
@@ -829,10 +836,12 @@ async def main():
     print("="*60)
 
     # Plot results
-    backtester.plot_results(result, save_path='ai_backtest_results.png')
+    plot_filename = f'ai_backtest_results_{timeframe.lower()}.png'
+    backtester.plot_results(result, save_path=plot_filename)
 
     # Save detailed trade log
     if result.trades:
+        trades_filename = f'ai_backtest_trades_{timeframe.lower()}.csv'
         trades_df = pd.DataFrame([{
             'entry_time': t.entry_time,
             'exit_time': t.exit_time,
@@ -846,8 +855,19 @@ async def main():
             'ai_reasoning': t.ai_reasoning[:100] + '...' if len(t.ai_reasoning) > 100 else t.ai_reasoning
         } for t in result.trades])
 
-        trades_df.to_csv('ai_backtest_trades.csv', index=False)
-        logger.info("Detailed trade log saved to ai_backtest_trades.csv")
+        trades_df.to_csv(trades_filename, index=False)
+        logger.info(f"Detailed trade log saved to {trades_filename}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    # Get timeframe from command line argument, default to M15
+    timeframe = sys.argv[1] if len(sys.argv) > 1 else 'M15'
+
+    # Validate timeframe
+    valid_timeframes = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4']
+    if timeframe not in valid_timeframes:
+        print(f"Invalid timeframe. Valid options: {', '.join(valid_timeframes)}")
+        sys.exit(1)
+
+    asyncio.run(main(timeframe))
