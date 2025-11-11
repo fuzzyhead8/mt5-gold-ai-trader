@@ -1,0 +1,44 @@
+# Core dependencies
+numpy>=1.21.0
+pandas>=1.3.0
+asyncio-mqtt>=0.11.0
+python-dotenv>=0.19.0
+
+# MetaTrader 5 API
+MetaTrader5>=5.0.40
+
+# Web Framework
+flask>=2.0.0
+
+# Machine Learning & AI
+scikit-learn>=1.0.0
+tensorflow>=2.8.0
+torch>=1.11.0
+transformers>=4.15.0
+openai>=1.0.0
+
+# Technical Analysis
+ta-lib>=0.4.25
+pandas-ta>=0.3.14b
+
+# Data Visualization
+matplotlib>=3.5.0
+plotly>=5.5.0
+seaborn>=0.11.0
+
+# Logging & Monitoring
+loguru>=0.6.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.18.0
+
+# Optional: For advanced AI features
+anthropic>=0.2.0  # For Claude/Sonnet models
+google-generativeai>=0.1.0  # For Gemini models
+
+# Development
+black>=22.0.0
+isort>=5.10.0
+flake8>=4.0.0
+mypy>=0.950
