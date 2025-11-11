@@ -5,7 +5,7 @@ from strategies.scalping_pyramiding import ScalpingPyramidingStrategy
 
 # Create sample data to test
 np.random.seed(42)
-dates = pd.date_range(start='2024-01-01', periods=200, freq='5min')
+dates = pd.date_range(start=pd.Timestamp.now().date(), periods=200, freq='5min')
 
 # Create a trending pattern for testing
 trend = np.linspace(2600, 2650, 200)

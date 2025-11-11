@@ -88,7 +88,7 @@ async def test_indicators():
     import pandas as pd
     import numpy as np
 
-    dates = pd.date_range('2024-01-01', periods=100, freq='H')
+    dates = pd.date_range(pd.Timestamp.now().date(), periods=100, freq='H')
     np.random.seed(42)
 
     sample_data = pd.DataFrame({

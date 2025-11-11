@@ -3,6 +3,7 @@ Configuration file for Gold AI Sonnet 4.5
 """
 
 import os
+import datetime
 from typing import Dict, Any
 
 # Trading Configuration
@@ -36,7 +37,7 @@ AI_CONFIG = {
         'confidence_threshold': 0.6
     },
     'gpt_integration': {
-        'enabled': False,  # Set to True when GPT API is available
+        'enabled': True,  # Enable GPT integration for AI analysis
         'model': 'gpt-4o-mini',
         'api_key': os.getenv('OPENAI_API_KEY', ''),
         'max_tokens': 1000,
@@ -144,8 +145,8 @@ LOGGING_CONFIG = {
 # Backtesting Configuration
 BACKTEST_CONFIG = {
     'enabled': True,
-    'start_date': '2023-01-01',
-    'end_date': '2024-01-01',
+    'start_date': '2025-01-01',
+    'end_date': datetime.date.today().isoformat(),
     'initial_balance': 10000,
     'leverage': 100,
     'commission': 0.0002,  # Commission per lot
